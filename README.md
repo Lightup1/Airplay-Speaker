@@ -1,125 +1,137 @@
 # Sonic Cast TV
 
-Sonic Cast TV is a music-first Android TV AirPlay receiver. This customized build
-adds a living-room Now Playing interface, cover art, real track metadata, remote
-transport controls, synchronized lyrics from LRCLIB, and a CD-quality status
-display. Its default receiver name is
-`Sonic Cast TV`; audio advertising and the software ALAC decoder are enabled by
-default, while video advertising is disabled for a focused music experience.
+<p align="center">
+  <strong>AirPlay music receiver สำหรับ Android TV พร้อมปกเคลื่อนไหวและเนื้อเพลงแบบคำต่อคำ</strong>
+</p>
 
-Version 0.5.0 adds a dedicated classic RAOP speaker engine based on
-[Shairplay](https://github.com/juhovh/shairplay). The default music-only mode
-now accepts the protocol used by the Music app on current macOS releases and
-decodes its ALAC stream to 16-bit/44.1 kHz stereo PCM. Artwork, metadata,
-progress, DACP controls, background playback, and synchronized lyrics remain
-connected to the TV Now Playing experience.
+<p align="center">
+  <img alt="Android TV 7.0+" src="https://img.shields.io/badge/Android%20TV-7.0%2B-3DDC84?logo=android&logoColor=white">
+  <img alt="CD quality audio" src="https://img.shields.io/badge/Audio-16--bit%20%2F%2044.1%20kHz-8B5CF6">
+  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white">
+  <img alt="License GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-blue">
+</p>
 
-Version 0.4.0 added a dedicated ten-foot Android TV interface with a left-side
-remote-control navigation rail, large receiver cards, a two-column TV settings
-screen, TV diagnostics, and an immersive full-screen Now Playing layout.
+Sonic Cast TV เปลี่ยน Android TV ให้เป็นลำโพง AirPlay สำหรับฟังเพลงในห้องนั่งเล่น รองรับเสียง ALAC ระดับ CD Quality, ข้อมูลเพลงและปกอัลบั้ม, รีโมตควบคุมการเล่น, ปกเคลื่อนไหวจาก Apple Music และเนื้อเพลงที่ไฮไลต์ตามเวลาแบบ Word-by-Word บนอินเทอร์เฟซที่ออกแบบสำหรับจอ 1920×1080 และรีโมต D-pad โดยเฉพาะ
 
-For music-only operation, Sonic Cast advertises a classic `_raop._tcp` speaker
-profile and runs the matching receiver protocol. It no longer presents itself
-as an `_airplay._tcp` Apple TV unless video advertising is explicitly enabled.
-Turning video advertising on switches back to UxPlay for mirroring and HLS.
+## วิดีโอสาธิต
 
-Version 0.3.0 introduced a sticky foreground media service when
-background mode is enabled (the default). Pressing Home during music playback no
-longer opens Picture-in-Picture; audio and system media controls remain active in
-the background. Lyrics are fetched from `https://lrclib.net` using the track title,
-artist, album and duration supplied by the AirPlay sender. No account or API key
-is used, no lyrics are bundled with the application, and availability varies by
-track.
+<p align="center">
+  <a href="docs/media/SonicCastTV-demo.mp4">
+    <img src="docs/media/SonicCastTV-demo-poster.jpg" alt="Sonic Cast TV demo" width="100%">
+  </a>
+</p>
 
-This project is a GPL-3.0 derivative of
-[jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server),
-based on upstream version 0.0.23 (commit
-`70c414ade84fbc3715a58d4c299687bca99c4dfe`). The bundled native Android
-libraries were taken from that matching upstream release and their corresponding
-source is included under `app/src/main/cpp`. See [NOTICE.md](NOTICE.md) for
-attribution and build details.
+<p align="center">
+  <a href="docs/media/SonicCastTV-demo.mp4"><strong>▶ เปิดวิดีโอสาธิต 1080p ความยาว 15 วินาที</strong></a>
+</p>
 
-## Sonic Cast build
+> วิดีโอนี้บันทึกจาก Android TV จริงที่ 1920×1080, 59.94 FPS และไม่มีเสียง
 
-The supplied Gradle configuration packages native libraries from
-`app/src/main/jniLibs`. The classic receiver can be rebuilt with Android NDK
-r27c using `app/src/main/cpp/classic/CMakeLists.txt`; its complete Shairplay
-source and license are retained under `app/src/main/cpp/third_party/shairplay`.
-The UxPlay libraries match the upstream 0.0.23 Android release.
+## จุดเด่น
 
----
+- **AirPlay Music Receiver** — โหมดลำโพง RAOP ที่ทำงานร่วมกับ Music บน iPhone, iPad และ macOS
+- **CD Quality Audio** — รับและถอดรหัส ALAC เป็น PCM สเตอริโอ 16-bit / 44.1 kHz
+- **ออกแบบเพื่อทีวีจริง** — ตัวอักษรและระยะห่างสำหรับการมองจากระยะไกล พร้อมการควบคุมด้วย D-pad
+- **Dynamic Artwork Background** — ผสมสีพื้นหลังจากปกอัลบั้มและเคลื่อนไหวด้วย GPU
+- **Apple Music Motion Artwork** — ค้นหาและเล่นปกวิดีโอ HLS แบบวนเมื่ออัลบั้มนั้นรองรับ
+- **Static Cover Companion** — โหลดปกนิ่ง 1200×1200 คู่กับปกเคลื่อนไหวเพื่อสร้างสีพื้นหลังให้ตรงกับอัลบั้ม
+- **Word-by-Word Lyrics** — ใช้เวลาระดับคำ/พยางค์เมื่อมีข้อมูล และประเมินช่วงคำอัตโนมัติเมื่อมีเพียงเวลาระดับบรรทัด
+- **Display-synced Lyrics** — การไฮไลต์เนื้อเพลงเดินตามเฟรมจอ 59.94/60 Hz
+- **Minimal Now Playing UI** — ซ่อนตัวควบคุมอัตโนมัติและจัดปก/เนื้อเพลงกลับสู่กึ่งกลางจออย่างนุ่มนวล
+- **Animated Playing Indicator** — แท่งเสียงเคลื่อนไหวข้างชื่อเพลงโดยไม่เพิ่มภาระการจัดวาง UI
+- **Background Playback** — เล่นเสียงต่อเมื่อกด Home พร้อม Media Session และการแจ้งเตือนควบคุมเพลง
+- **DACP Controls** — เล่น/หยุด, เพลงก่อนหน้า/ถัดไป, ปรับเสียง และปิดเสียงจากหน้า TV
+- **Optional Video Mode** — สามารถเปิดการโฆษณา AirPlay Display สำหรับ Mirroring/HLS ได้จากการตั้งค่า
 
-# AirPlay Receiver for Android (upstream documentation)
+## ความต้องการของระบบ
 
-[![Stars](https://img.shields.io/github/stars/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server)
-[![GitHub](https://img.shields.io/github/downloads/jqssun/android-airplay-server/total?label=GitHub&logo=GitHub)](https://github.com/jqssun/android-airplay-server/releases)
-[![license](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/jqssun/android-airplay-server/blob/main/LICENSE)
-[![build](https://img.shields.io/github/actions/workflow/status/jqssun/android-airplay-server/apk.yml?label=build)](https://github.com/jqssun/android-airplay-server/actions/workflows/apk.yml)
-[![release](https://img.shields.io/github/v/release/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server/releases)
+- Android 7.0 (API 24) ขึ้นไป
+- Android TV หรือกล่อง Android ที่มีจอและระบบเสียง
+- อุปกรณ์ส่งและ Android TV อยู่ในเครือข่าย Wi-Fi/LAN เดียวกัน
+- แนะนำจอ 1920×1080 ที่ 60 Hz
 
-A fully featured free and open-source implementation of AirPlay for Android that turns your device into an AirPlay-compatible display and speaker, based on [UxPlay](https://github.com/FDH2/UxPlay). It is the first open-source AirPlay 2 receiver for Android and Android TV, and works with iOS/iPadOS, macOS devices as well as other sender implementations.
+## การติดตั้ง
 
-[<img height="48" alt="Get it on Google Play" src="https://jqssun.github.io/images/badges/google-play-store.svg">](https://play.google.com/store/apps/details?id=io.github.jqssun.airplay)
-[<img height="48" alt="Get it on F-Droid" src="https://jqssun.github.io/images/badges/fdroid.svg">](https://f-droid.org/packages/io.github.jqssun.airplay)
-[<img height="48" alt="Get it on GitHub" src="https://jqssun.github.io/images/badges/github.svg">](https://github.com/jqssun/android-airplay-server/releases/latest)
-
-<video loop src='https://github.com/user-attachments/assets/79ed7c0c-0102-43cc-8816-4f00ce6a4199' alt="demo" width="200" style="display: block; margin: auto;"></video>
-
-## Compatibility
-
-- Android 7.0+, including Android TV
-- AirPlay devices on the same subnet, including iOS/iPadOS, macOS devices, or other sender implementations
-
-## Features
-
-- Screen mirroring with H.264 and H.265 (HEVC) video decoding
-- Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
-- Video playback with support for HLS, downloads, and remote controls
-- Music playback with track information, cover art, and remote controls
-- Support for Android TV with directional pad navigation and seeking controls
-- Support for Picture-in-Picture, automatic resolution and mode switching
-- Optional PIN authentication
-- Video resolution, overscan, and frame rate control
-- Audio latency control and support for software decoder fallback
-- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
-- Android native media session integration with notification controls
-
-> [!WARNING]
-> DRM content (e.g. from the Apple TV application) is not supported.
-
-## Implementation
-
-This application uses [Shairplay](https://github.com/juhovh/shairplay) for the default classic AirPlay music-speaker route and [UxPlay](https://github.com/FDH2/UxPlay) when video advertising is enabled. Both are connected to Android through JNI. Audio is rendered with AudioTrack or decoded via MediaCodec/the Apple ALAC software fallback, while mirroring video is decoded via MediaCodec and rendered to a SurfaceView. HLS sessions are served through a local playlist proxy.
-
-```mermaid
-flowchart LR
-    AppleDevice["Apple Device (Sender)"]
-    Shairplay["Shairplay (C/JNI)<br/>Classic RAOP + ALAC"]
-    UxPlay["UxPlay (C/JNI)<br/>Mirror + FairPlay + HLS"]
-    AndroidApp["Android (Receiver)<br/>MediaCodec + AudioTrack<br/>ExoPlayer (HLS)"]
-
-    AppleDevice -- "Music / classic RAOP" --> Shairplay
-    Shairplay --> AndroidApp
-    AppleDevice -- "Mirror / HLS" --> UxPlay
-    UxPlay --> AndroidApp
-```
-
-CMake is used for native C/C++ components under [`app/src/main/cpp`](app/src/main/cpp). Submodules must be initialized before building. 
+ดาวน์โหลด APK จากหน้า **Releases** ของโปรเจกต์ แล้วติดตั้งด้วย USB, แอพจัดการไฟล์ หรือ ADB:
 
 ```bash
-git submodule update --init --recursive
+adb connect <ANDROID_TV_IP>:5555
+adb install -r SonicCastTV.apk
+```
+
+หลังติดตั้ง แอพจะปรากฏในหน้า Apps ของ Android TV ในชื่อ **Sonic Cast TV**
+
+## วิธีใช้งาน
+
+1. เปิด Sonic Cast TV และตรวจว่าสถานะเป็น `LISTENING FOR AIRPLAY`
+2. เชื่อมต่อ iPhone, iPad หรือ Mac กับเครือข่ายเดียวกับทีวี
+3. เปิด Music หรือ Control Center แล้วเลือกอุปกรณ์ AirPlay ชื่อ `Sonic Cast TV`
+4. เริ่มเล่นเพลง ปกอัลบั้ม เนื้อเพลง และสีพื้นหลังจะแสดงโดยอัตโนมัติ
+5. ใช้รีโมต TV เพื่อเรียกตัวควบคุมขึ้นมา หรือปล่อยไว้ให้ซ่อนอัตโนมัติ
+
+ชื่ออุปกรณ์, การเริ่มเซิร์ฟเวอร์อัตโนมัติ, การเล่นพื้นหลัง และโหมดวิดีโอสามารถเปลี่ยนได้จากหน้า **Settings**
+
+## แหล่งข้อมูลเนื้อเพลงและปกเคลื่อนไหว
+
+แอพไม่ฝังเนื้อเพลงหรือปกเคลื่อนไหวไว้ใน APK แต่ค้นหาเมื่อเริ่มเล่นเพลง:
+
+- [LyricsPlus](https://github.com/ibratabian17/lyricsplus) — แหล่งข้อมูลหลักสำหรับเวลาแบบคำ/พยางค์
+- [LRCLIB](https://lrclib.net) — แหล่งสำรองสำหรับเนื้อเพลงแบบซิงก์และเนื้อเพลงธรรมดา
+- [iTunes Search API](https://performance-partners.apple.com/search-api) — ระบุอัลบั้มและปกนิ่งที่ตรงกับเพลง
+- Apple Music public album pages/CDN — ตรวจและสตรีมปกเคลื่อนไหวเมื่อมีให้ใช้งาน
+
+แอพส่งเฉพาะชื่อเพลง ศิลปิน อัลบั้ม และระยะเวลาเพื่อค้นหารายการที่ตรงกัน ไม่ต้องเข้าสู่ระบบ ไม่มีระบบวิเคราะห์พฤติกรรม และไม่บันทึกเนื้อเพลงหรือไฟล์ปกจากบริการเหล่านี้ลงเครื่องอย่างถาวร
+
+## การ Build
+
+ต้องใช้ Java 17 และ Android SDK 36:
+
+```bash
+./gradlew testDebugUnitTest
 ./gradlew assembleDebug
 ```
 
-Check out the [CI](https://github.com/jqssun/android-airplay-server/blob/main/.github/workflows/apk.yml) for more details on reproducible builds.
+APK ที่สร้างเสร็จจะอยู่ที่:
 
-## Credits
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
 
-- [UxPlay](https://github.com/FDH2/UxPlay) for the AirPlay/RAOP server implementation
-- [Shairplay](https://github.com/juhovh/shairplay) for the classic RAOP speaker implementation
-- [ALAC](https://github.com/macosforge/alac) for the lossless audio decoder
-- [Next Player](https://github.com/anilbeesetti/nextplayer) for the video player
+โปรเจกต์มี native libraries สำหรับ `armeabi-v7a`, `arm64-v8a` และ `x86_64` รวมอยู่แล้ว ส่วนซอร์สของตัวรับสัญญาณและตัวถอดรหัสอยู่ใน `app/src/main/cpp`
 
----
+## โครงสร้างส่วนสำคัญ
 
-Disclaimer: This project is not affiliated with Apple Inc.
+```text
+app/src/main/kotlin/io/github/jqssun/airplay/
+├── artwork/     # ปกนิ่งและ Apple Music motion artwork
+├── audio/       # Metadata, DACP และสถานะเสียง
+├── lyrics/      # LyricsPlus, LRCLIB และ word timing
+├── renderer/    # ตัวเล่นวิดีโอและ audio/video pipeline
+├── service/     # Foreground AirPlay service
+└── ui/          # Compose UI สำหรับโทรศัพท์และ Android TV
+```
+
+## ข้อจำกัด
+
+- ไม่รองรับเนื้อหา DRM เช่นวิดีโอที่ป้องกันด้วย FairPlay
+- ปกเคลื่อนไหวและเนื้อเพลงขึ้นอยู่กับข้อมูลที่ผู้ให้บริการมีสำหรับแต่ละเพลง
+- โครงสร้างหน้า Apple Music หรือ API ภายนอกอาจเปลี่ยนแปลงได้ในอนาคต
+- ความเข้ากันได้และ latency อาจแตกต่างตามอุปกรณ์ส่ง, Android TV และคุณภาพเครือข่าย
+
+## Open-source และเครดิต
+
+Sonic Cast TV เป็นงานดัดแปลงภายใต้ GPL-3.0 จาก [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server) รุ่น 0.0.23 และใช้ส่วนประกอบโอเพนซอร์สดังต่อไปนี้:
+
+- [Shairplay](https://github.com/juhovh/shairplay) — classic RAOP music receiver
+- [UxPlay](https://github.com/FDH2/UxPlay) — AirPlay mirroring และ HLS receiver
+- [Apple ALAC](https://github.com/macosforge/alac) — lossless audio decoder
+- [Media3](https://github.com/androidx/media) — HLS motion-artwork playback
+- [AdvancedRPC](https://github.com/down-bad/advanced-rpc) — แรงบันดาลใจสำหรับ animated-artwork fallback
+
+รายละเอียดซอร์สและสัญญาอนุญาตเพิ่มเติมอยู่ใน [NOTICE.md](NOTICE.md) และ [LICENSE](LICENSE)
+
+## License
+
+โปรเจกต์นี้เผยแพร่ภายใต้ [GNU General Public License v3.0](LICENSE)
+
+Sonic Cast TV ไม่มีความเกี่ยวข้องหรือได้รับการรับรองจาก Apple Inc. คำว่า AirPlay และ Apple Music เป็นเครื่องหมายการค้าของ Apple Inc.
