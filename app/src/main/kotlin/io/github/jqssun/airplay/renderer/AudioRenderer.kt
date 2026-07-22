@@ -15,6 +15,7 @@ class AudioRenderer {
     private var codec: MediaCodec? = null
     private var track: AudioTrack? = null
     private var currentCt = -1
+    private var currentPcmFormat: Triple<Int, Int, Int>? = null
     private var failedCt = -1
     private var swAlacHandle = 0L  // software ALAC decoder handle
     @Volatile var swAlacEnabled = true
@@ -25,6 +26,38 @@ class AudioRenderer {
     @Volatile private var pendingReset = false
 
     fun markSessionEnded() { pendingReset = true }
+
+    fun flushPcm() {
+        track?.let {
+            try {
+                it.pause()
+                it.flush()
+                it.play()
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "Unable to flush PCM output", e)
+            }
+        }
+    }
+
+    fun feedPcm(data: ByteArray, bits: Int, channels: Int, sampleRate: Int) {
+        if (pendingReset) {
+            pendingReset = false
+            stop()
+        }
+        val format = Triple(bits, channels, sampleRate)
+        if (currentCt != CT_PCM || currentPcmFormat != format || track == null) {
+            stop()
+            if (bits != 16 || channels !in 1..2 || sampleRate <= 0) {
+                Log.e(TAG, "Unsupported PCM format: $bits-bit, $channels ch, $sampleRate Hz")
+                return
+            }
+            currentCt = CT_PCM
+            currentPcmFormat = format
+            codecLabel = "ALAC · CD ${bits}-bit / ${sampleRate / 1000.0} kHz"
+            _ensureAudioTrack(sampleRate, channels)
+        }
+        track?.write(data, 0, data.size)
+    }
 
     fun feedAudio(data: ByteArray, ct: Int, ntpTimeNs: Long) {
         if (pendingReset) {
@@ -155,18 +188,27 @@ class AudioRenderer {
         Log.i(TAG, "Audio started: ct=$ct")
     }
 
-    private fun _ensureAudioTrack() {
+    private fun _ensureAudioTrack(sampleRate: Int = 44100, channels: Int = 2) {
         if (track != null) return
+        val channelMask = if (channels == 1) {
+            AudioFormat.CHANNEL_OUT_MONO
+        } else {
+            AudioFormat.CHANNEL_OUT_STEREO
+        }
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
         val fmt = AudioFormat.Builder()
-            .setSampleRate(44100)
+            .setSampleRate(sampleRate)
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+            .setChannelMask(channelMask)
             .build()
-        val bufSize = AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+        val bufSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            channelMask,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
         track = AudioTrack(attrs, fmt, bufSize * audioBufferMultiplier.coerceIn(4, 8), AudioTrack.MODE_STREAM, 0).also {
             it.setVolume(volume)
             it.play()
@@ -211,6 +253,7 @@ class AudioRenderer {
             swAlacHandle = 0L
         }
         currentCt = -1
+        currentPcmFormat = null
         failedCt = -1
         codecLabel = ""
     }
@@ -222,5 +265,6 @@ class AudioRenderer {
         const val CT_ALAC = 2
         const val CT_AAC_LC = 4
         const val CT_AAC_ELD = 8
+        const val CT_PCM = 0
     }
 }

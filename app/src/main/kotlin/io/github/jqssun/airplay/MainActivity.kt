@@ -76,6 +76,8 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
                     viewModel.updateFromService()
+                    // General service state is sampled independently of the
+                    // display-synchronised lyric clock, which runs per frame.
                     delay(200)
                 }
             }
@@ -122,7 +124,9 @@ class MainActivity : ComponentActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
-            viewModel.connectionCount.value > 0) {
+            viewModel.connectionCount.value > 0 &&
+            !viewModel.audioOnly.value &&
+            (viewModel.mirroringActive.value || viewModel.videoPlaybackActive.value)) {
             enterPip()
         }
     }

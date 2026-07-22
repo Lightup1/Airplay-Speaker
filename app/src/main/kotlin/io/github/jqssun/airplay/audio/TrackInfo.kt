@@ -6,6 +6,8 @@ data class TrackInfo(
     val title: String = "",
     val artist: String = "",
     val album: String = "",
+    /** Songwriter/composer supplied by the AirPlay sender, when available. */
+    val composer: String = "",
     val genre: String = "",
     val durationMs: Long = 0,
     val coverArt: Bitmap? = null,
@@ -18,6 +20,7 @@ data class TrackInfo(
                 title = flat["minm"] as? String ?: "",
                 artist = flat["asar"] as? String ?: "",
                 album = flat["asal"] as? String ?: "",
+                composer = flat["ascm"] as? String ?: "",
                 genre = flat["asgn"] as? String ?: "",
                 durationMs = (flat["astm"] as? Long) ?: 0L,
                 coverArt = existingArt,

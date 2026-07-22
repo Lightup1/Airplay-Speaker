@@ -1,5 +1,6 @@
 *.iml
 .gradle/
+.gradle-sandbox/
 /local.properties
 /.idea/
 .DS_Store
@@ -10,3 +11,4 @@
 .cxx/
 
 *.jks
+*.apk

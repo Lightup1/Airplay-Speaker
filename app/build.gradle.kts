@@ -15,7 +15,6 @@ val localProps = Properties().apply {
 android {
     namespace = "io.github.jqssun.airplay"
     compileSdk = 36
-    ndkVersion = "27.0.12077973"
 
     if (localProps.containsKey("storeFile")) {
         signingConfigs {
@@ -29,27 +28,13 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.jqssun.airplay"
+        applicationId = "com.soniccast.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 23
-        versionName = "0.0.23"
-
+        versionCode = 30
+        versionName = "0.14.8"
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
-        }
-
-        externalNativeBuild {
-            cmake {
-                arguments += "-DANDROID_STL=c++_shared"
-                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
-            }
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+            abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
     }
 
@@ -77,6 +62,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -130,4 +116,7 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260522")
 }

@@ -1,0 +1,973 @@
+package io.github.jqssun.airplay.ui
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.CastConnected
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.jqssun.airplay.BuildConfig
+import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.service.AirPlayService.ServerState
+import io.github.jqssun.airplay.viewmodel.MainViewModel
+
+private enum class TvDestination(val labelRes: Int, val icon: ImageVector) {
+    HOME(R.string.tv_nav_home, Icons.Default.Home),
+    SETTINGS(R.string.tv_nav_settings, Icons.Default.Settings),
+    DIAGNOSTICS(R.string.tv_nav_diagnostics, Icons.AutoMirrored.Filled.Article),
+}
+
+@Composable
+internal fun TvMainScreen(
+    viewModel: MainViewModel,
+    video: @Composable () -> Unit,
+    onFullscreen: () -> Unit,
+    onPip: () -> Unit,
+    showAudioMode: Boolean,
+) {
+    var destination by remember { mutableStateOf(TvDestination.HOME) }
+    val state by viewModel.serverState.collectAsState()
+    val connections by viewModel.connectionCount.collectAsState()
+    val mirroring by viewModel.mirroringActive.collectAsState()
+    val immersiveNowPlaying = showAudioMode && state == ServerState.RUNNING &&
+        connections > 0 && destination == TvDestination.HOME
+
+    BackHandler(enabled = destination != TvDestination.HOME) {
+        destination = TvDestination.HOME
+    }
+
+    if (immersiveNowPlaying) {
+        TvNowPlayingScreen(
+            viewModel = viewModel,
+            onSettings = { destination = TvDestination.SETTINGS },
+        )
+        return
+    }
+
+    if (destination == TvDestination.SETTINGS) {
+        TvSettingsScreen(
+            viewModel = viewModel,
+            onBack = { destination = TvDestination.HOME },
+        )
+        return
+    }
+
+    if (mirroring && state == ServerState.RUNNING && connections > 0) {
+        TvMirroringScreen(
+            video = video,
+            onFullscreen = onFullscreen,
+            onPip = onPip,
+            onSettings = { destination = TvDestination.SETTINGS },
+        )
+        return
+    }
+
+    TvIdleScreen(
+        state = state,
+        onSettings = { destination = TvDestination.SETTINGS },
+    )
+}
+
+@Composable
+private fun TvIdleScreen(
+    state: ServerState,
+    onSettings: () -> Unit,
+) {
+    val settingsFocus = remember { FocusRequester() }
+    val pulse = rememberInfiniteTransition(label = "airPlayIdlePulse")
+    val glow by pulse.animateFloat(
+        initialValue = 0.14f,
+        targetValue = 0.32f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2_200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "airPlayIdleGlow",
+    )
+    val breathe by pulse.animateFloat(
+        initialValue = 0.975f,
+        targetValue = 1.025f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2_900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "airPlayIdleBreathe",
+    )
+    val ready = state == ServerState.RUNNING
+    val foreground = if (ready) Color(0xFFF2F3F5) else Color(0xFFFFA1A1)
+
+    LaunchedEffect(Unit) {
+        runCatching { settingsFocus.requestFocus() }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(Color(0xFF171A20), Color(0xFF08090D)),
+                    radius = 820f,
+                )
+            ),
+    ) {
+        IconButton(
+            onClick = onSettings,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 30.dp, end = 34.dp)
+                .size(54.dp)
+                .focusRequester(settingsFocus)
+                .dpadFocus(CircleShape),
+        ) {
+            Icon(
+                Icons.Default.Settings,
+                contentDescription = stringResource(R.string.tv_nav_settings),
+                tint = Color(0xFFD7D9DF),
+                modifier = Modifier.size(25.dp),
+            )
+        }
+
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(180.dp)
+                    .graphicsLayer {
+                        scaleX = breathe
+                        scaleY = breathe
+                    }
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFFB4D9FF).copy(alpha = glow),
+                                Color.Transparent,
+                            )
+                        ),
+                        CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                AirPlayGlyph(
+                    color = foreground,
+                    modifier = Modifier.size(112.dp),
+                )
+            }
+            Spacer(Modifier.height(18.dp))
+            Text(
+                if (ready) stringResource(R.string.tv_listening)
+                else stringResource(R.string.tv_receiver_stopped),
+                color = foreground.copy(alpha = 0.82f),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 2.2.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AirPlayGlyph(
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = size.minDimension * 0.055f
+        val screenTop = size.height * 0.08f
+        val screenHeight = size.height * 0.58f
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(strokeWidth / 2f, screenTop),
+            size = Size(size.width - strokeWidth, screenHeight),
+            cornerRadius = CornerRadius(size.minDimension * 0.07f),
+            style = Stroke(width = strokeWidth),
+        )
+        val triangle = Path().apply {
+            moveTo(size.width * 0.5f, size.height * 0.59f)
+            lineTo(size.width * 0.27f, size.height * 0.91f)
+            lineTo(size.width * 0.73f, size.height * 0.91f)
+            close()
+        }
+        drawPath(triangle, color)
+    }
+}
+
+@Composable
+private fun TvMirroringScreen(
+    video: @Composable () -> Unit,
+    onFullscreen: () -> Unit,
+    onPip: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
+        video()
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            IconButton(onClick = onPip, modifier = Modifier.dpadFocus(CircleShape)) {
+                Icon(painterResource(R.drawable.ic_pip), null, tint = Color.White)
+            }
+            IconButton(onClick = onFullscreen, modifier = Modifier.dpadFocus(CircleShape)) {
+                Icon(Icons.Default.Fullscreen, null, tint = Color.White)
+            }
+            IconButton(onClick = onSettings, modifier = Modifier.dpadFocus(CircleShape)) {
+                Icon(Icons.Default.Settings, stringResource(R.string.tv_nav_settings), tint = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvSettingsScreen(
+    viewModel: MainViewModel,
+    onBack: () -> Unit,
+) {
+    val backFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { backFocus.requestFocus() }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFF090A0E), Color(0xFF11141A), Color(0xFF08090D))
+                )
+            ),
+    ) {
+        TvSettingsPanel(
+            viewModel = viewModel,
+            modifier = Modifier.padding(start = 58.dp),
+        )
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 22.dp, top = 25.dp)
+                .size(50.dp)
+                .focusRequester(backFocus)
+                .dpadFocus(CircleShape),
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = stringResource(R.string.tv_back),
+                tint = Color(0xFFF2F3F5),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TvNavigationRail(
+    selected: TvDestination,
+    onSelected: (TvDestination) -> Unit,
+    state: ServerState,
+    connections: Int,
+    homeFocus: FocusRequester,
+) {
+    Column(
+        modifier = Modifier
+            .width(116.dp)
+            .fillMaxHeight()
+            .background(Color(0xA608090D))
+            .padding(horizontal = 13.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(Color(0x14FFFFFF)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.sonic_app_icon),
+                contentDescription = stringResource(R.string.app_name),
+                tint = Color.Unspecified,
+                modifier = Modifier.size(38.dp),
+            )
+        }
+
+        Spacer(Modifier.height(30.dp))
+
+        TvNavItem(
+            destination = TvDestination.HOME,
+            selected = selected == TvDestination.HOME,
+            onClick = { onSelected(TvDestination.HOME) },
+            modifier = Modifier.focusRequester(homeFocus),
+        )
+        Spacer(Modifier.height(8.dp))
+        TvNavItem(
+            destination = TvDestination.SETTINGS,
+            selected = selected == TvDestination.SETTINGS,
+            onClick = { onSelected(TvDestination.SETTINGS) },
+        )
+        Spacer(Modifier.height(8.dp))
+        TvNavItem(
+            destination = TvDestination.DIAGNOSTICS,
+            selected = selected == TvDestination.DIAGNOSTICS,
+            onClick = { onSelected(TvDestination.DIAGNOSTICS) },
+        )
+
+        Spacer(Modifier.weight(1f))
+
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0x0FFFFFFF))
+                .padding(horizontal = 10.dp, vertical = 11.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                Modifier
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(if (state == ServerState.RUNNING) Color(0xFF9EF2D0) else Color(0xFFFF8A8A))
+            )
+            Spacer(Modifier.height(7.dp))
+            Text(
+                if (connections > 0) "$connections ONLINE"
+                else if (state == ServerState.RUNNING) "READY" else "OFFLINE",
+                color = Color(0xFFA9AAB4),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "v${BuildConfig.VERSION_NAME}",
+            color = Color(0xFF6E7082),
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun TvNavItem(
+    destination: TvDestination,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val background by animateColorAsState(
+        when {
+            focused -> Color(0x20FFFFFF)
+            selected -> Color(0x12FFFFFF)
+            else -> Color.Transparent
+        },
+        label = "tvNavBackground",
+    )
+    val scale by animateFloatAsState(if (focused) 1.035f else 1f, label = "tvNavScale")
+    val contentColor = if (focused || selected) Color(0xFFF2F3F5) else Color(0xFF858791)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(20.dp))
+            .background(background)
+            .border(
+                width = if (focused) 2.dp else 0.dp,
+                color = if (focused) Color(0xFF9EF2D0) else Color.Transparent,
+                shape = RoundedCornerShape(20.dp),
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(role = Role.Button, onClick = onClick)
+            .focusable()
+            .padding(vertical = 9.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            destination.icon,
+            contentDescription = stringResource(destination.labelRes),
+            tint = contentColor,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            stringResource(destination.labelRes),
+            color = contentColor,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun TvReceiverHome(
+    viewModel: MainViewModel,
+    video: @Composable () -> Unit,
+    onFullscreen: () -> Unit,
+    onPip: () -> Unit,
+) {
+    val state by viewModel.serverState.collectAsState()
+    val connections by viewModel.connectionCount.collectAsState()
+    val serverName by viewModel.serverName.collectAsState()
+    val mirroring by viewModel.mirroringActive.collectAsState()
+    val mint = Color(0xFF9EF2D0)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 38.dp, vertical = 30.dp)
+    ) {
+        Text(
+            stringResource(R.string.tv_home_title),
+            color = Color(0xFFF6F4FF),
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+            stringResource(R.string.tv_home_subtitle),
+            color = Color(0xFF9A9BAD),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            if (mirroring && state == ServerState.RUNNING) {
+                Box(
+                    modifier = Modifier
+                        .weight(1.6f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    video()
+                    Row(
+                        modifier = Modifier.align(Alignment.TopEnd).padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        IconButton(onClick = onPip, modifier = Modifier.dpadFocus(CircleShape)) {
+                            Icon(painterResource(R.drawable.ic_pip), null, tint = Color.White)
+                        }
+                        IconButton(onClick = onFullscreen, modifier = Modifier.dpadFocus(CircleShape)) {
+                            Icon(Icons.Default.Fullscreen, null, tint = Color.White)
+                        }
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .weight(1.6f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF1B2023), Color(0xFF121519), Color(0xFF0E1013))
+                            )
+                        )
+                        .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(22.dp))
+                        .padding(30.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(13.dp)
+                                .clip(CircleShape)
+                                .background(if (state == ServerState.RUNNING) mint else Color(0xFFFF8A8A))
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (state == ServerState.RUNNING) stringResource(R.string.tv_listening)
+                            else stringResource(R.string.tv_receiver_stopped),
+                            color = if (state == ServerState.RUNNING) mint else Color(0xFFFFA0A0),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    Icon(
+                        if (connections > 0) Icons.Default.CastConnected else Icons.Default.Cast,
+                        null,
+                        tint = mint,
+                        modifier = Modifier.size(62.dp),
+                    )
+                    Spacer(Modifier.height(15.dp))
+                    Text(
+                        serverName,
+                        color = Color(0xFFF8F7FF),
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(7.dp))
+                    Text(
+                        if (connections > 0) stringResource(R.string.tv_connected_waiting)
+                        else stringResource(R.string.tv_ready_description),
+                        color = Color(0xFFB1B1C0),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TvFeatureChip("ALAC LOSSLESS")
+                        TvFeatureChip("16-BIT / 44.1 kHz")
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Button(
+                        onClick = {
+                            if (state == ServerState.RUNNING) viewModel.stopServer()
+                            else viewModel.startServer()
+                        },
+                        modifier = Modifier.height(58.dp).dpadFocus(RoundedCornerShape(18.dp)),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (state == ServerState.RUNNING) Color(0xFF35384A) else mint,
+                            contentColor = if (state == ServerState.RUNNING) Color.White else Color(0xFF0A1512),
+                        ),
+                        contentPadding = PaddingValues(horizontal = 25.dp),
+                    ) {
+                        Icon(if (state == ServerState.RUNNING) Icons.Default.Stop else Icons.Default.PlayArrow, null)
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            if (state == ServerState.RUNNING) stringResource(R.string.btn_stop)
+                            else stringResource(R.string.btn_start),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color(0xB3121518))
+                    .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(22.dp))
+                    .padding(26.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.MusicNote, null, tint = mint, modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        stringResource(R.string.tv_quick_connect),
+                        color = Color(0xFFF6F4FF),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Spacer(Modifier.height(20.dp))
+                TvConnectStep("1", stringResource(R.string.tv_connect_step_1))
+                Spacer(Modifier.height(14.dp))
+                TvConnectStep("2", stringResource(R.string.tv_connect_step_2, serverName))
+                Spacer(Modifier.height(14.dp))
+                TvConnectStep("3", stringResource(R.string.tv_connect_step_3))
+                Spacer(Modifier.weight(1f))
+                Text(
+                    stringResource(R.string.tv_speaker_mode_note),
+                    color = mint,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvFeatureChip(text: String) {
+    Text(
+        text,
+        color = Color(0xFFDAD8E8),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color(0x12FFFFFF))
+            .border(1.dp, Color(0x18FFFFFF), RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun TvConnectStep(number: String, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(Color(0x18FFFFFF)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(number, color = Color(0xFF9EF2D0), fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.width(15.dp))
+        Text(
+            text,
+            color = Color(0xFFD5D4DE),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun TvSettingsPanel(
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val serverState by viewModel.serverState.collectAsState()
+    val runInBackground by viewModel.runInBackground.collectAsState()
+    val bootAutoStart by viewModel.bootAutoStart.collectAsState()
+    val autoStart by viewModel.autoStart.collectAsState()
+    val alac by viewModel.alacEnabled.collectAsState()
+    val swAlac by viewModel.swAlacEnabled.collectAsState()
+    val allowNew by viewModel.allowNewConn.collectAsState()
+    val requirePin by viewModel.requirePin.collectAsState()
+    val keepScreenOn by viewModel.keepScreenOn.collectAsState()
+    val advertiseVideo by viewModel.advertiseVideo.collectAsState()
+    val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 38.dp, vertical = 30.dp)
+    ) {
+        Text(
+            stringResource(R.string.tv_settings_title),
+            color = Color(0xFFF6F4FF),
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+            stringResource(R.string.tv_settings_subtitle),
+            color = Color(0xFF9A9BAD),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(Modifier.height(24.dp))
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 30.dp),
+        ) {
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_airplay_receiver),
+                    stringResource(R.string.setting_airplay_receiver_desc),
+                    serverState == ServerState.RUNNING,
+                ) { enabled ->
+                    if (enabled) viewModel.startServer() else viewModel.stopServer()
+                }
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_advertise_video),
+                    stringResource(R.string.setting_advertise_video_desc),
+                    advertiseVideo,
+                    viewModel::setAdvertiseVideo,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_motion_artwork),
+                    stringResource(R.string.setting_motion_artwork_desc),
+                    motionArtworkEnabled,
+                    viewModel::setMotionArtworkEnabled,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_run_in_background),
+                    stringResource(R.string.setting_run_in_background_desc),
+                    runInBackground,
+                    viewModel::setRunInBackground,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_boot_auto_start),
+                    stringResource(R.string.setting_boot_auto_start_desc),
+                    bootAutoStart,
+                    viewModel::setBootAutoStart,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_auto_start),
+                    stringResource(R.string.setting_auto_start_desc),
+                    autoStart,
+                    viewModel::setAutoStart,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_alac),
+                    stringResource(R.string.setting_alac_desc),
+                    alac,
+                    viewModel::setAlacEnabled,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_sw_alac),
+                    stringResource(R.string.setting_sw_alac_desc),
+                    swAlac,
+                    viewModel::setSwAlacEnabled,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_allow_new_conn),
+                    stringResource(R.string.setting_allow_new_conn_desc),
+                    allowNew,
+                    viewModel::setAllowNewConn,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_require_pin),
+                    stringResource(R.string.setting_require_pin_desc),
+                    requirePin,
+                    viewModel::setRequirePin,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_keep_screen_on),
+                    stringResource(R.string.setting_keep_screen_on_desc),
+                    keepScreenOn,
+                    viewModel::setKeepScreenOn,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvSettingCard(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.025f else 1f, label = "tvSettingScale")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(102.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (focused) Color(0xFF22272B) else Color(0xB3121518))
+            .border(
+                if (focused) 2.dp else 1.dp,
+                if (focused) Color(0xFF9EF2D0) else Color(0x1AFFFFFF),
+                RoundedCornerShape(18.dp),
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(role = Role.Switch) { onCheckedChange(!checked) }
+            .focusable()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Color(0xFFF6F4FF),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                description,
+                color = Color(0xFF9697A8),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(18.dp))
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+@Composable
+private fun TvDiagnosticsPanel(viewModel: MainViewModel) {
+    val logs by viewModel.logs.collectAsState()
+    val visibleLogs = logs.takeLast(300)
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(visibleLogs.size) {
+        if (visibleLogs.isNotEmpty()) listState.scrollToItem(visibleLogs.lastIndex)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 38.dp, vertical = 30.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text(
+                    stringResource(R.string.tv_diagnostics_title),
+                    color = Color(0xFFF6F4FF),
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    stringResource(R.string.tv_diagnostics_subtitle),
+                    color = Color(0xFF9A9BAD),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = viewModel::exportLogs,
+                    modifier = Modifier.height(52.dp).dpadFocus(RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Text(stringResource(R.string.btn_export), fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = viewModel::clearLogs,
+                    modifier = Modifier.height(52.dp).dpadFocus(RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF313547)),
+                ) {
+                    Text(stringResource(R.string.btn_clear), fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xCC0D0F12))
+                .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(20.dp))
+                .padding(22.dp)
+        ) {
+            if (visibleLogs.isEmpty()) {
+                Text(
+                    stringResource(R.string.tv_no_diagnostics),
+                    color = Color(0xFF8D8E9E),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    items(visibleLogs) { line ->
+                        Text(
+                            line,
+                            color = Color(0xFFBFC2CE),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

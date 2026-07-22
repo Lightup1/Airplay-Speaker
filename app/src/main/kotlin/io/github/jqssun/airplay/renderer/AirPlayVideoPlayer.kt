@@ -12,6 +12,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
@@ -28,6 +29,7 @@ data class PlaybackSnapshot(
 )
 
 // exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
+@androidx.annotation.OptIn(UnstableApi::class)
 class AirPlayVideoPlayer(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())

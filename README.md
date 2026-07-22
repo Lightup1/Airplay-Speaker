@@ -1,70 +1,172 @@
-# AirPlay Receiver for Android
+# Airplay Speaker
 
-[![Stars](https://img.shields.io/github/stars/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server)
-[![GitHub](https://img.shields.io/github/downloads/jqssun/android-airplay-server/total?label=GitHub&logo=GitHub)](https://github.com/jqssun/android-airplay-server/releases)
-[![license](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/jqssun/android-airplay-server/blob/main/LICENSE)
-[![build](https://img.shields.io/github/actions/workflow/status/jqssun/android-airplay-server/apk.yml?label=build)](https://github.com/jqssun/android-airplay-server/actions/workflows/apk.yml)
-[![release](https://img.shields.io/github/v/release/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server/releases)
+<p align="center">
+  <strong>An AirPlay music receiver for Android TV with motion artwork and word-by-word lyrics.</strong>
+</p>
 
-A fully featured free and open-source implementation of AirPlay for Android that turns your device into an AirPlay-compatible display and speaker, based on [UxPlay](https://github.com/FDH2/UxPlay). It is the first open-source AirPlay 2 receiver for Android and Android TV, and works with iOS/iPadOS, macOS devices as well as other sender implementations.
+<p align="center">
+  <a href="https://github.com/l3kza08/Sonic-Cast/releases/latest">
+    <img alt="Download APK" src="https://img.shields.io/badge/Download-Latest%20APK-ff765d?style=for-the-badge&logo=android&logoColor=white">
+  </a>
+</p>
 
-[<img height="48" alt="Get it on Google Play" src="https://jqssun.github.io/images/badges/google-play-store.svg">](https://play.google.com/store/apps/details?id=io.github.jqssun.airplay)
-[<img height="48" alt="Get it on F-Droid" src="https://jqssun.github.io/images/badges/fdroid.svg">](https://f-droid.org/packages/io.github.jqssun.airplay)
-[<img height="48" alt="Get it on GitHub" src="https://jqssun.github.io/images/badges/github.svg">](https://github.com/jqssun/android-airplay-server/releases/latest)
+<p align="center">
+  <img alt="Android TV 7.0+" src="https://img.shields.io/badge/Android%20TV-7.0%2B-3DDC84?logo=android&logoColor=white">
+  <img alt="CD-quality audio" src="https://img.shields.io/badge/Audio-16--bit%20%2F%2044.1%20kHz-8B5CF6">
+  <img alt="Kotlin and Compose" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white">
+  <img alt="Version 0.14.8" src="https://img.shields.io/badge/Version-0.14.8-ff765d">
+  <img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue">
+</p>
 
-<video loop src='https://github.com/user-attachments/assets/79ed7c0c-0102-43cc-8816-4f00ce6a4199' alt="demo" width="200" style="display: block; margin: auto;"></video>
+Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. It plays lossless ALAC audio at CD quality, displays track metadata and album artwork, supports background playback and remote transport controls, and presents synchronized lyrics in a television-first 1920×1080 interface.
 
-## Compatibility
+**[Open the interactive website](https://airplay-speaker-tv-0722.worapornkummarn.chatgpt.site)** · **[Download the latest APK](https://github.com/l3kza08/Sonic-Cast/releases/latest)**
 
-- Android 7.0+, including Android TV
-- AirPlay devices on the same subnet, including iOS/iPadOS, macOS devices, or other sender implementations
+## Demo
 
-## Features
+<p align="center">
+  <a href="docs/media/SonicCastTV-demo.mp4">
+    <img src="docs/media/SonicCastTV-demo-poster.jpg" alt="Airplay Speaker running on Android TV" width="100%">
+  </a>
+</p>
 
-- Screen mirroring with H.264 and H.265 (HEVC) video decoding
-- Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
-- Video playback with support for HLS, downloads, and remote controls
-- Music playback with track information, cover art, and remote controls
-- Support for Android TV with directional pad navigation and seeking controls
-- Support for Picture-in-Picture, automatic resolution and mode switching
-- Optional PIN authentication
-- Video resolution, overscan, and frame rate control
-- Audio latency control and support for software decoder fallback
-- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
-- Android native media session integration with notification controls
+<p align="center">
+  <a href="docs/media/SonicCastTV-demo.mp4"><strong>▶ Watch the 15-second 1080p demo</strong></a>
+</p>
 
-> [!WARNING]
-> DRM content (e.g. from the Apple TV application) is not supported.
+> The demo was captured from a real Android TV at 1920×1080 and 59.94 FPS. The recording has no audio.
 
-## Implementation
+## Highlights
 
-This application uses the C-based [UxPlay](https://github.com/FDH2/UxPlay) library to implement the AirPlay/RAOP protocol, with a JNI bridge to the Android application layer. Audio can be decoded via MediaCodec (AAC) or the Apple ALAC decoder (software fallback), while mirroring video is decoded via MediaCodec and rendered to a SurfaceView. HLS sessions are served through a local playlist proxy.
+### Audio and AirPlay
 
-```mermaid
-flowchart LR
-    AppleDevice["Apple Device (Sender)"]
-    UxPlay["UxPlay (C/JNI)<br/>RAOP + mDNS<br/>FairPlay + HLS"]
-    AndroidApp["Android (Receiver)<br/>MediaCodec + AudioTrack<br/>ExoPlayer (HLS)"]
+- **AirPlay music receiver** — classic RAOP mode works with Music and other AirPlay senders on iPhone, iPad, and macOS.
+- **CD-quality audio** — receives ALAC and decodes it to 16-bit / 44.1 kHz stereo PCM.
+- **Background playback** — keeps playing after Home is pressed, with a Media Session and media notification.
+- **DACP controls** — supports play, pause, previous, next, and sender-controlled volume.
+- **Optional video mode** — AirPlay Display advertising for mirroring and HLS can be enabled in Settings.
 
-    AppleDevice -- "RAOP / HLS" --> UxPlay
-    UxPlay --> AndroidApp
-```
+### Television-first design
 
-CMake is used for native C/C++ components under [`app/src/main/cpp`](app/src/main/cpp). Submodules must be initialized before building. 
+- **Calm waiting screen** — shows only the AirPlay mark and listening status before a sender connects.
+- **Minimal Now Playing view** — keeps artwork and lyrics centered without a permanent control bar.
+- **Dynamic artwork background** — extracts album colors and blends them into a GPU-animated, blurred backdrop.
+- **Motion artwork** — discovers and loops public Apple Music HLS artwork when an album provides it.
+- **Motion artwork switch** — disables video artwork and the floating static-cover effect while preserving the normal cover for the UI and background palette.
+- **Static cover companion** — loads a square normal cover alongside motion artwork so the background always matches the album.
+- **Long-title marquee** — track, artist, and album text stays on one line and moves through soft edge fades when necessary.
+- **Playback-aware equalizer** — the indicator beside the title moves only while audio is playing.
+- **Low-memory tuning** — artwork, background effects, and lyric rendering are designed to remain responsive on devices with 2 GB of RAM.
+- **Fallback artwork** — missing covers use a neutral gray tile with a music note.
+
+### Synchronized lyrics
+
+- **Word-by-word karaoke** — follows supplied word or syllable timing and applies a soft aura to the active text.
+- **Display-synchronized motion** — lyric progress and rail transitions follow the display frame clock at up to 60 Hz.
+- **Focused lyric rail** — normally shows only the active line and the upcoming line; completed lines move away smoothly.
+- **Remote browsing** — pressing Up or Down reveals the complete lyric timeline. The view returns to the current lyric after browsing stops.
+- **Plain lyrics fallback** — songs without timestamps display their full text as a readable scrolling document.
+- **Duet placement** — alternating vocal parts can appear on the left and right when singer information is available.
+- **Backing-vocal asides** — parenthesized lyrics can be separated into a smaller line above or below the main lyric.
+- **Instrumental indicator** — three large breathing dots appear during a long intro or instrumental break, brightening in sequence before the next line.
+- **End credits** — a `Written By` block can appear after the final lyric when composer metadata is available.
+- **Pause accuracy** — lyric timing, rail motion, karaoke highlighting, the equalizer, and break dots all freeze immediately when playback pauses.
+
+## Requirements
+
+- Android 7.0 / API 24 or newer
+- Android TV or an Android box with video and audio output
+- The sender and receiver on the same Wi-Fi or wired LAN
+- A 1920×1080 display at 60 Hz is recommended
+
+## Install
+
+1. Download the newest APK from [GitHub Releases](https://github.com/l3kza08/Sonic-Cast/releases/latest).
+2. Install it with a USB drive, a file manager, or ADB:
 
 ```bash
-git submodule update --init --recursive
+adb connect <ANDROID_TV_IP>:5555
+adb install -r Airplay-Speaker-v0.14.8.apk
+```
+
+The application appears in the Android TV app launcher as **Airplay Speaker**.
+
+> The published APK uses a development signing key. Android may require the previous build to be uninstalled if that build was signed with a different key.
+
+## Use
+
+1. Open Airplay Speaker and wait for `LISTENING FOR AIRPLAY`.
+2. Connect the iPhone, iPad, Mac, and Android TV to the same network.
+3. Open Music or Control Center and choose **Airplay Speaker** from the AirPlay menu.
+4. Start a track. Artwork, metadata, ambient color, and available lyrics appear automatically.
+5. Press Up or Down on the TV remote to browse all lyrics, then stop interacting to return to live sync.
+
+The receiver name, automatic startup, background playback, motion artwork, and optional video mode can be changed in **Settings**.
+
+## Lyrics and artwork data
+
+Lyrics and motion artwork are not bundled in the APK. The app looks them up when a track begins:
+
+- [LyricsPlus](https://github.com/ibratabian17/lyricsplus) — preferred source for syllable, word, and line timing.
+- [LRCLIB](https://lrclib.net) — fallback source for synchronized and plain lyrics.
+- [iTunes Search API](https://performance-partners.apple.com/search-api) — identifies matching albums and high-resolution static artwork.
+- Public Apple Music album pages and CDN — used to discover motion artwork when it is published for an album.
+
+Only the current title, artist, album, and duration are used to locate a matching result. No account is required, the app includes no behavioral analytics, and retrieved lyrics or artwork are not permanently stored by Airplay Speaker.
+
+## Build from source
+
+Install Java 17 and Android SDK 36, then run:
+
+```bash
+./gradlew testDebugUnitTest
 ./gradlew assembleDebug
 ```
 
-Check out the [CI](https://github.com/jqssun/android-airplay-server/blob/main/.github/workflows/apk.yml) for more details on reproducible builds.
+The installable APK is written to:
 
-## Credits
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
 
-- [UxPlay](https://github.com/FDH2/UxPlay) for the AirPlay/RAOP server implementation
-- [ALAC](https://github.com/macosforge/alac) for the lossless audio decoder
-- [Next Player](https://github.com/anilbeesetti/nextplayer) for the video player
+Native libraries for `armeabi-v7a`, `arm64-v8a`, and `x86_64` are included. Receiver and decoder source is retained under `app/src/main/cpp`.
 
----
+## Project map
 
-Disclaimer: This project is not affiliated with Apple Inc.
+```text
+app/src/main/kotlin/io/github/jqssun/airplay/
+├── artwork/     # Static and Apple Music motion artwork
+├── audio/       # Metadata, DACP, and playback state
+├── lyrics/      # LyricsPlus, LRCLIB, parsing, and timing
+├── renderer/    # Audio and video pipelines
+├── service/     # Foreground AirPlay receiver service
+└── ui/          # Compose UI for Android and Android TV
+```
+
+Native receiver components and retained source live under `app/src/main/cpp/` and `app/src/main/jniLibs/`.
+
+## Known limitations
+
+- DRM-protected media, including FairPlay-protected video, is not supported.
+- Motion artwork and synchronized lyrics depend on external data availability for each track.
+- Public Apple Music page structures and third-party lyrics APIs may change.
+- Compatibility and latency vary by sender, Android TV hardware, and network quality.
+- Dolby Atmos decoding and bitstream output are not supported; AirPlay music uses stereo PCM.
+
+## Open-source credits
+
+Airplay Speaker is a GPL-3.0 modification of [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server), based on upstream version 0.0.23. It also incorporates or builds upon:
+
+- [Shairplay](https://github.com/juhovh/shairplay) — classic RAOP music receiver
+- [UxPlay](https://github.com/FDH2/UxPlay) — AirPlay mirroring and HLS receiver
+- [Apple ALAC](https://github.com/macosforge/alac) — lossless audio decoder
+- [Media3](https://github.com/androidx/media) — HLS motion-artwork playback
+- [AdvancedRPC](https://github.com/down-bad/advanced-rpc) — inspiration for the animated-artwork fallback
+
+See [NOTICE.md](NOTICE.md) for component provenance and retained license information.
+
+## License
+
+This project is distributed under the [GNU General Public License v3.0](LICENSE).
+
+Airplay Speaker is not affiliated with or endorsed by Apple Inc. AirPlay and Apple Music are trademarks of Apple Inc.

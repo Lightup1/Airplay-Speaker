@@ -3,6 +3,7 @@ package io.github.jqssun.airplay.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.Surface
 import androidx.core.content.FileProvider
@@ -10,7 +11,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
 import io.github.jqssun.airplay.Prefs
+import io.github.jqssun.airplay.artwork.AnimatedArtworkRequest
+import io.github.jqssun.airplay.artwork.AppleMusicArtworkClient
+import io.github.jqssun.airplay.artwork.RemoteArtworkLoader
 import io.github.jqssun.airplay.audio.TrackInfo
+import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -57,6 +62,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val prefs = app.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
     private val logFile = File(app.filesDir, "airplay_logs.txt")
+    private val animatedArtworkClient = AppleMusicArtworkClient()
+    private val remoteArtworkLoader = RemoteArtworkLoader()
     private var service: AirPlayService? = null
     val dacpPlayer: Player? get() = service?.dacpPlayer
 
@@ -67,6 +74,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     }
     fun audioScanEnd() { service?.dacpController?.playResume() }
     fun audioMuteToggle() { service?.dacpController?.muteToggle() }
+    fun sampleAudioPositionMs(): Long {
+        val activeService = service
+        return if (activeService?.audioOnly?.value == true) {
+            activeService.currentPositionMs()
+        } else {
+            _audioPositionMs.value
+        }
+    }
 
     private val _serverState = MutableStateFlow(ServerState.STOPPED)
     val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
@@ -149,6 +164,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _idlePreview = MutableStateFlow(prefs.getBoolean(Prefs.IDLE_PREVIEW, Prefs.DEF_IDLE_PREVIEW))
     val idlePreview: StateFlow<Boolean> = _idlePreview.asStateFlow()
+
+    private val _motionArtworkEnabled = MutableStateFlow(
+        prefs.getBoolean(Prefs.MOTION_ARTWORK_ENABLED, Prefs.DEF_MOTION_ARTWORK_ENABLED)
+    )
+    val motionArtworkEnabled: StateFlow<Boolean> = _motionArtworkEnabled.asStateFlow()
 
     private val _autoFullscreen = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_FULLSCREEN, Prefs.DEF_AUTO_FULLSCREEN))
     val autoFullscreen: StateFlow<Boolean> = _autoFullscreen.asStateFlow()
@@ -243,6 +263,22 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo: StateFlow<TrackInfo> = _trackInfo.asStateFlow()
+
+    private val _lyrics = MutableStateFlow(LyricsState())
+    val lyrics: StateFlow<LyricsState> = _lyrics.asStateFlow()
+
+    private val _audioPositionMs = MutableStateFlow(0L)
+    val audioPositionMs: StateFlow<Long> = _audioPositionMs.asStateFlow()
+
+    private val _audioPlaying = MutableStateFlow(false)
+    val audioPlaying: StateFlow<Boolean> = _audioPlaying.asStateFlow()
+
+    private val _animatedArtworkUrl = MutableStateFlow<String?>(null)
+    val animatedArtworkUrl: StateFlow<String?> = _animatedArtworkUrl.asStateFlow()
+    private val _animatedArtworkCover = MutableStateFlow<Bitmap?>(null)
+    val animatedArtworkCover: StateFlow<Bitmap?> = _animatedArtworkCover.asStateFlow()
+    private var animatedArtworkKey = ""
+    private var animatedArtworkJob: Job? = null
 
 
     // logs
@@ -368,6 +404,19 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply(); _applyByServerRestart() }
     fun setAudioLatencyMs(v: Int) { _audioLatencyMs.value = v; prefs.edit().putInt(Prefs.AUDIO_LATENCY_MS, v).apply(); _applyByServerRestart() }
     fun setIdlePreview(v: Boolean) { _idlePreview.value = v; prefs.edit().putBoolean(Prefs.IDLE_PREVIEW, v).apply() }
+    fun setMotionArtworkEnabled(v: Boolean) {
+        _motionArtworkEnabled.value = v
+        prefs.edit().putBoolean(Prefs.MOTION_ARTWORK_ENABLED, v).apply()
+        if (v) {
+            requestAnimatedArtworkIfNeeded(_trackInfo.value)
+        } else {
+            animatedArtworkJob?.cancel()
+            animatedArtworkJob = null
+            animatedArtworkKey = ""
+            _animatedArtworkUrl.value = null
+            _animatedArtworkCover.value = null
+        }
+    }
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
     fun setAdvertiseVideo(v: Boolean) { _advertiseVideo.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_VIDEO, v).apply(); _applyByServerRestart() }
@@ -393,6 +442,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     fun unbindService() {
         service = null
+        animatedArtworkJob?.cancel()
+        animatedArtworkJob = null
+        animatedArtworkKey = ""
+        _animatedArtworkUrl.value = null
+        _animatedArtworkCover.value = null
     }
 
     fun startServer() {
@@ -548,10 +602,43 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
                 _videoBuffering.value = false
             }
             _mirroringActive.value = it.mirroringActive.value
-            _trackInfo.value = it.trackInfo.value
+            val nextTrack = it.trackInfo.value
+            _trackInfo.value = nextTrack
+            requestAnimatedArtworkIfNeeded(nextTrack)
+            _lyrics.value = it.lyrics.value
+            _audioPositionMs.value = if (it.audioOnly.value) it.currentPositionMs() else 0L
+            _audioPlaying.value = it.audioOnly.value && it.playing.value
             if (_debugEnabled.value) {
                 _debugInfo.value = it.collectDebugInfo()
             }
+        }
+    }
+
+    private fun requestAnimatedArtworkIfNeeded(track: TrackInfo) {
+        if (!_motionArtworkEnabled.value) return
+        val key = listOf(track.title, track.artist, track.album)
+            .joinToString("\u0000") { it.trim().lowercase(Locale.ROOT) }
+        if (key == animatedArtworkKey) return
+        animatedArtworkKey = key
+        animatedArtworkJob?.cancel()
+        _animatedArtworkUrl.value = null
+        _animatedArtworkCover.value = null
+        if (track.title.isBlank() || track.artist.isBlank()) return
+
+        animatedArtworkJob = viewModelScope.launch {
+            val result = animatedArtworkClient.findSquareMotionArtwork(
+                AnimatedArtworkRequest(
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    durationMs = track.durationMs,
+                )
+            )
+            if (animatedArtworkKey != key) return@launch
+            _animatedArtworkUrl.value = result?.motionUrl
+
+            val staticCover = result?.staticArtworkUrl?.let { remoteArtworkLoader.load(it) }
+            if (animatedArtworkKey == key) _animatedArtworkCover.value = staticCover
         }
     }
 

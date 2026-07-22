@@ -27,6 +27,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.media.app.NotificationCompat as MediaNotificationCompat
+import androidx.media3.common.util.UnstableApi
 import io.github.jqssun.airplay.MainActivity
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
@@ -34,18 +35,36 @@ import io.github.jqssun.airplay.audio.DacpController
 import io.github.jqssun.airplay.audio.DacpPlayer
 import io.github.jqssun.airplay.audio.DmapParser
 import io.github.jqssun.airplay.audio.TrackInfo
+import io.github.jqssun.airplay.artwork.ArtworkDecoder
+import io.github.jqssun.airplay.bridge.ClassicRaopBridge
+import io.github.jqssun.airplay.bridge.ClassicRaopCallbackHandler
 import io.github.jqssun.airplay.bridge.NativeBridge
 import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
 import io.github.jqssun.airplay.download.VideoDownloader
+import io.github.jqssun.airplay.lyrics.AppleMusicLyricsClient
+import io.github.jqssun.airplay.lyrics.LrclibClient
+import io.github.jqssun.airplay.lyrics.LyricsOvhClient
+import io.github.jqssun.airplay.lyrics.LyricsPlusClient
+import io.github.jqssun.airplay.lyrics.LyricsRequest
+import io.github.jqssun.airplay.lyrics.LyricsState
+import io.github.jqssun.airplay.lyrics.LyricsStatus
+import io.github.jqssun.airplay.lyrics.NeteaseLyricsClient
 import io.github.jqssun.airplay.renderer.AirPlayVideoPlayer
 import io.github.jqssun.airplay.renderer.AudioRenderer
 import io.github.jqssun.airplay.renderer.VideoRenderer
 import io.github.jqssun.airplay.viewmodel.DebugInfo
 import java.net.NetworkInterface
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 data class VideoPlaybackInfo(
     val positionMs: Long = 0,
@@ -56,9 +75,16 @@ data class VideoPlaybackInfo(
     val buffering: Boolean = false,
 )
 
-class AirPlayService : Service(), RaopCallbackHandler {
+@androidx.annotation.OptIn(UnstableApi::class)
+class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandler {
 
     private var nativeHandle = 0L
+    private var classicHandle = 0L
+    @Volatile private var classicConnectionActive = false
+    @Volatile private var classicBits = 16
+    @Volatile private var classicChannels = 2
+    @Volatile private var classicSampleRate = 44100
+    private var classicPassword: String? = null
     private var nsdManager: NsdServiceManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
@@ -123,6 +149,17 @@ class AirPlayService : Service(), RaopCallbackHandler {
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo = _trackInfo.asStateFlow()
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val duetLyricsClient = AppleMusicLyricsClient()
+    private val synchronizedLyricsClient = NeteaseLyricsClient()
+    private val preciseLyricsClient = LyricsPlusClient()
+    private val plainLyricsClient = LyricsOvhClient()
+    private val lyricsFallbackClient = LrclibClient()
+    private val _lyrics = MutableStateFlow(LyricsState())
+    val lyrics = _lyrics.asStateFlow()
+    private var lyricsJob: Job? = null
+    private var lyricsKey = ""
+
     private val _positionMs = MutableStateFlow(0L)
     val positionMs = _positionMs.asStateFlow()
 
@@ -134,6 +171,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     @Volatile private var _progressBaseMs = 0L
     @Volatile private var _progressBaseTime = 0L
+    @Volatile private var _lastAudioPacketAtMs = 0L
 
     fun currentPositionMs(): Long {
         if (_progressBaseTime == 0L || !_playing.value) return _positionMs.value
@@ -192,6 +230,20 @@ class AirPlayService : Service(), RaopCallbackHandler {
             positionMs = ::currentPositionMs,
             setPlaying = ::_setPlaying,
         )
+        serviceScope.launch {
+            while (true) {
+                delay(AUDIO_PAUSE_WATCHDOG_INTERVAL_MS)
+                val silenceMs = SystemClock.elapsedRealtime() - _lastAudioPacketAtMs
+                if (_audioOnly.value && _playing.value &&
+                    _lastAudioPacketAtMs > 0L && silenceMs >= AUDIO_PAUSE_SILENCE_MS
+                ) {
+                    // A sender pause often stops RAOP packets without a
+                    // dedicated pause callback. Freeze the UI transport at
+                    // the same point as the receiver's audio stream.
+                    _setPlaying(false)
+                }
+            }
+        }
         mediaSession = MediaSessionCompat(this, "AirPlay").apply {
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() {
@@ -271,14 +323,21 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_SERVER) {
+        val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+        val runInBackground = prefs.getBoolean(Prefs.RUN_IN_BACKGROUND, Prefs.DEF_RUN_IN_BACKGROUND)
+        val shouldStart = intent?.action == ACTION_START_SERVER ||
+            (intent == null && runInBackground)
+        if (shouldStart && _serverState.value != ServerState.RUNNING) {
             promoteToForeground()
-            val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
             val name = prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME) ?: Prefs.DEF_SERVER_NAME
             startServer(name, ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
         }
-        return START_NOT_STICKY
+        return if (runInBackground && _serverState.value == ServerState.RUNNING) {
+            START_STICKY
+        } else {
+            START_NOT_STICKY
+        }
     }
 
     fun startServer(name: String) {
@@ -299,6 +358,60 @@ class AirPlayService : Service(), RaopCallbackHandler {
         val keyFile = filesDir.resolve("airplay.pem").absolutePath
         val nohold = prefs.getBoolean(Prefs.ALLOW_NEW_CONN, Prefs.DEF_ALLOW_NEW_CONN)
         val requirePin = prefs.getBoolean(Prefs.REQUIRE_PIN, Prefs.DEF_REQUIRE_PIN)
+        val advertiseVideo = prefs.getBoolean(Prefs.ADVERTISE_VIDEO, Prefs.DEF_ADVERTISE_VIDEO)
+        val advertiseAudio = prefs.getBoolean(Prefs.ADVERTISE_AUDIO, Prefs.DEF_ADVERTISE_AUDIO)
+        val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT).coerceIn(1, 65535)
+
+        // macOS Music uses the classic RAOP speaker route. UxPlay's Apple TV
+        // compatibility route works for system audio and mirroring, but Music
+        // rejects it before opening a session. In the default music-only mode,
+        // run the dedicated classic receiver instead.
+        if (advertiseAudio && !advertiseVideo) {
+            audioRenderer.audioBufferMultiplier = prefs.getInt(
+                Prefs.AUDIO_BUFFER_MULTIPLIER,
+                Prefs.DEF_AUDIO_BUFFER_MULTIPLIER,
+            )
+            val pemKey = resources.openRawResource(R.raw.airport_key)
+                .bufferedReader()
+                .use { it.readText() }
+            classicHandle = ClassicRaopBridge.nativeCreate(this, pemKey)
+            if (classicHandle == 0L) {
+                log("Classic RAOP init failed")
+                _failStart()
+                return
+            }
+
+            classicPassword = if (requirePin) {
+                "%04d".format(java.security.SecureRandom().nextInt(10_000))
+            } else {
+                null
+            }
+            val port = ClassicRaopBridge.nativeStart(
+                classicHandle,
+                requestedPort,
+                hwAddr,
+                classicPassword,
+            )
+            if (port < 0) {
+                log("Classic RAOP failed to start on port $requestedPort")
+                _failStart()
+                return
+            }
+
+            val raopName = hwAddr.joinToString("") { "%02X".format(it.toInt() and 0xff) } +
+                "@$effectiveName"
+            nsdManager?.registerRaop(raopName, port, classicSpeakerTxt(requirePin))
+            classicPassword?.let(::onDisplayPin)
+
+            _serverState.value = ServerState.RUNNING
+            if (ensureServiceStarted) {
+                ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
+            }
+            promoteToForeground()
+            log("Discovery mode: classic RAOP music speaker")
+            log("CD-quality receiver started on port $port")
+            return
+        }
 
         nativeHandle = NativeBridge.nativeInit(this, hwAddr, effectiveName, keyFile, nohold, requirePin)
         if (nativeHandle == 0L) {
@@ -328,8 +441,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
         audioRenderer.realtimeDecoderPriority = realtimePriority
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
-        val advertiseVideo = prefs.getBoolean(Prefs.ADVERTISE_VIDEO, Prefs.DEF_ADVERTISE_VIDEO)
-        val advertiseAudio = prefs.getBoolean(Prefs.ADVERTISE_AUDIO, Prefs.DEF_ADVERTISE_AUDIO)
         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
         NativeBridge.nativeSetAudioEnabled(nativeHandle, advertiseAudio)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
@@ -352,7 +463,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
 
-        val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT).coerceIn(1, 65535)
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
         if (port < 0) {
             log("Failed to start on port $requestedPort")
@@ -366,10 +476,18 @@ class AirPlayService : Service(), RaopCallbackHandler {
         val raopName = NativeBridge.nativeGetRaopServiceName(nativeHandle) ?: "AirPlay"
         val resolvedName = NativeBridge.nativeGetServerName(nativeHandle) ?: effectiveName
 
-        if (prefs.getBoolean(Prefs.ADVERTISE_AUDIO, Prefs.DEF_ADVERTISE_AUDIO)) {
+        if (advertiseAudio) {
             nsdManager?.registerRaop(raopName, port, raopTxt)
         }
-        nsdManager?.registerAirplay(resolvedName, port, airplayTxt)
+        // Music-only builds must appear as a RAOP speaker, not as an Apple TV.
+        // Advertising _airplay._tcp without the complete AirPlay 2 remote-control
+        // stack makes recent Music clients choose an unsupported connection path.
+        if (advertiseVideo) {
+            nsdManager?.registerAirplay(resolvedName, port, airplayTxt)
+            log("Discovery mode: RAOP speaker + AirPlay display")
+        } else {
+            log("Discovery mode: RAOP music speaker")
+        }
 
         _serverState.value = ServerState.RUNNING
         if (ensureServiceStarted) {
@@ -379,7 +497,34 @@ class AirPlayService : Service(), RaopCallbackHandler {
         log("Server started on port $port")
     }
 
+    private fun classicSpeakerTxt(passwordRequired: Boolean): Map<String, String> = linkedMapOf(
+        // This profile follows a classic AirPort/Shairport speaker. Do not add
+        // vv/ft/pk here: those select the incompatible Apple TV session path.
+        "sf" to "0x4",
+        "fv" to "76400.10",
+        "am" to "AirPort10,115",
+        "vs" to "105.1",
+        "tp" to "TCP,UDP",
+        "vn" to "65537",
+        "md" to "0,1,2",
+        "ss" to "16",
+        "sr" to "44100",
+        "da" to "true",
+        "sv" to "false",
+        "et" to "0,1",
+        "ek" to "1",
+        "cn" to "0,1",
+        "ch" to "2",
+        "txtvers" to "1",
+        "pw" to passwordRequired.toString(),
+    )
+
     private fun _failStart() {
+        if (classicHandle != 0L) {
+            ClassicRaopBridge.nativeDestroy(classicHandle)
+            classicHandle = 0L
+        }
+        classicPassword = null
         if (nativeHandle != 0L) {
             NativeBridge.nativeDestroy(nativeHandle)
             nativeHandle = 0L
@@ -396,6 +541,13 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     fun stopServer() {
+        if (classicHandle != 0L) {
+            ClassicRaopBridge.nativeStop(classicHandle)
+            ClassicRaopBridge.nativeDestroy(classicHandle)
+            classicHandle = 0L
+        }
+        classicConnectionActive = false
+        classicPassword = null
         if (nativeHandle != 0L) {
             NativeBridge.nativeStop(nativeHandle)
             NativeBridge.nativeDestroy(nativeHandle)
@@ -418,8 +570,10 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _videoPollSuppressed = false
         _coverArtBytes = null
         _trackInfo.value = TrackInfo()
+        _resetLyrics()
         _positionMs.value = 0
         _durationMs.value = 0
+        _lastAudioPacketAtMs = 0L
         _serverState.value = ServerState.STOPPED
         _connectionCount.value = 0
         _refreshDacpPlayer()
@@ -487,6 +641,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     override fun onDestroy() {
         stopServer()
+        serviceScope.cancel()
         dacpPlayer.release()
         mediaReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
@@ -499,6 +654,65 @@ class AirPlayService : Service(), RaopCallbackHandler {
         super.onDestroy()
     }
 
+    // ClassicRaopCallbackHandler (called from native threads)
+
+    override fun onClassicAudioStart(bits: Int, channels: Int, sampleRate: Int) {
+        classicBits = bits
+        classicChannels = channels
+        classicSampleRate = sampleRate
+        clearPin()
+        if (!classicConnectionActive) {
+            val firstConnection = _connectionCount.value == 0
+            classicConnectionActive = true
+            onConnectionInit()
+            // The classic password has already been accepted when the audio
+            // session starts, so it is now safe to bring the TV UI forward.
+            if (firstConnection && requiresPin() && shouldLaunchOnConnect()) {
+                launchMainActivity()
+            }
+        }
+        onAudioOnly(true)
+        _lastAudioPacketAtMs = SystemClock.elapsedRealtime()
+        _playing.value = true
+        log("Classic ALAC audio: $bits-bit, $channels ch, $sampleRate Hz")
+    }
+
+    override fun onClassicPcm(data: ByteArray) {
+        _markAudioPacketReceived()
+        audioRenderer.feedPcm(data, classicBits, classicChannels, classicSampleRate)
+    }
+
+    override fun onClassicAudioStop() {
+        audioRenderer.markSessionEnded()
+        if (classicConnectionActive) {
+            classicConnectionActive = false
+            onConnectionDestroy()
+        }
+    }
+
+    override fun onClassicFlush() {
+        audioRenderer.flushPcm()
+        log("Classic RAOP buffer flushed")
+    }
+
+    override fun onClassicVolume(volume: Float) = onVolumeChange(volume)
+
+    override fun onClassicMetadata(data: ByteArray) = onMetadata(data)
+
+    override fun onClassicCoverArt(data: ByteArray) = onCoverArt(data)
+
+    override fun onClassicProgress(start: Long, current: Long, end: Long) {
+        onProgress(start, current, end)
+    }
+
+    override fun onClassicDacp(dacpId: String, activeRemote: String) {
+        onDacpId(dacpId, activeRemote)
+    }
+
+    override fun onClassicLog(message: String) {
+        log("Classic RAOP: $message")
+    }
+
     // RaopCallbackHandler (called from native threads)
 
     override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
@@ -506,6 +720,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onAudioData(data: ByteArray, ct: Int, ntpTimeNs: Long, seqNum: Int) {
+        _markAudioPacketReceived()
         audioRenderer.feedAudio(data, ct, ntpTimeNs)
     }
 
@@ -544,6 +759,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
             // pure music streaming (not screen mirroring audio)
             onAudioOnly(true)
         }
+        if (!usingScreen) _lastAudioPacketAtMs = SystemClock.elapsedRealtime()
         log("Audio format: ct=$ct spf=$spf screen=$usingScreen")
     }
 
@@ -585,8 +801,10 @@ class AirPlayService : Service(), RaopCallbackHandler {
             _videoPollSuppressed = false
             _coverArtBytes = null
             _trackInfo.value = TrackInfo()
+            _resetLyrics()
             _positionMs.value = 0
             _durationMs.value = 0
+            _lastAudioPacketAtMs = 0L
             mediaSession?.isActive = false
             audioRenderer.markSessionEnded()
             _refreshDacpPlayer()
@@ -609,17 +827,35 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     override fun onMetadata(data: ByteArray) {
         val map = DmapParser.parse(data)
-        val info = TrackInfo.fromDmap(map, _trackInfo.value.coverArt)
+        val previous = _trackInfo.value
+        val incoming = TrackInfo.fromDmap(map)
+        val isNewTrack = previous.title != incoming.title ||
+            previous.artist != incoming.artist ||
+            previous.album != incoming.album
+        // Do not show the prior song's sleeve while waiting for this track's
+        // artwork callback. A missing sleeve intentionally falls back to the
+        // neutral music-note card in the TV surface.
+        val info = incoming.copy(coverArt = if (isNewTrack) null else previous.coverArt)
+        if (isNewTrack) {
+            _coverArtBytes = null
+            _resetLyrics()
+        }
         _trackInfo.value = info
         if (info.durationMs > 0) _durationMs.value = info.durationMs
+        _requestLyricsIfReady()
         _updateMediaMetadata()
         _refreshDacpPlayer()
         log("Track: ${info.artist} - ${info.title}")
     }
 
     override fun onCoverArt(data: ByteArray) {
-        val bmp = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return
-        _coverArtBytes = data
+        val bmp = ArtworkDecoder.decode(data) ?: run {
+            log("Ignored oversized or invalid cover art (${data.size} bytes)")
+            return
+        }
+        // Metadata clients can use compact artwork data. Avoid retaining an
+        // additional multi-megabyte original in memory on constrained TVs.
+        _coverArtBytes = data.takeIf { it.size <= MAX_RETAINED_COVER_BYTES }
         _trackInfo.value = _trackInfo.value.copy(coverArt = bmp)
         _updateMediaMetadata()
         _refreshDacpPlayer()
@@ -635,7 +871,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _durationMs.value = durMs
         _progressBaseMs = posMs
         _progressBaseTime = SystemClock.elapsedRealtime()
-        _playing.value = true
+        _requestLyricsIfReady()
         _updatePlaybackState()
         _refreshDacpPlayer()
     }
@@ -657,6 +893,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
             mediaSession?.isActive = false
             _coverArtBytes = null
             _trackInfo.value = TrackInfo()
+            _resetLyrics()
             _positionMs.value = 0
             _durationMs.value = 0
             modeCallback?.invoke(false)
@@ -674,6 +911,70 @@ class AirPlayService : Service(), RaopCallbackHandler {
         info.coverArt?.let { builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
         mediaSession?.setMetadata(builder.build())
         _updateMediaNotification()
+    }
+
+    @Synchronized
+    private fun _resetLyrics() {
+        lyricsJob?.cancel()
+        lyricsJob = null
+        lyricsKey = ""
+        _lyrics.value = LyricsState()
+    }
+
+    @Synchronized
+    private fun _requestLyricsIfReady() {
+        val info = _trackInfo.value
+        val duration = _durationMs.value.takeIf { it > 0 } ?: info.durationMs
+        if (info.title.isBlank() || info.artist.isBlank() || duration <= 0) return
+
+        val roundedDuration = (duration + 500) / 1000
+        val key = listOf(info.title, info.artist, info.album, roundedDuration.toString())
+            .joinToString("|") { it.trim().lowercase() }
+        if (key == lyricsKey && _lyrics.value.status != LyricsStatus.IDLE) return
+
+        lyricsJob?.cancel()
+        lyricsKey = key
+        _lyrics.value = LyricsState(LyricsStatus.LOADING)
+        log("Lyrics: searching ${info.artist} - ${info.title}")
+        lyricsJob = serviceScope.launch {
+            val request = LyricsRequest(
+                title = info.title,
+                artist = info.artist,
+                album = info.album,
+                durationMs = duration,
+            )
+            var source = "Apple Music"
+            var result = duetLyricsClient.find(request)
+            if (result?.hasDisplayableLyrics() != true) {
+                source = "NetEase"
+                result = synchronizedLyricsClient.find(request)
+            }
+            if (result?.hasDisplayableLyrics() != true) {
+                source = "LyricsPlus"
+                result = preciseLyricsClient.findPrecise(request)
+            }
+            if (result?.hasDisplayableLyrics() != true) {
+                source = "Lyrics.ovh"
+                result = plainLyricsClient.find(request)
+            }
+            if (result?.hasDisplayableLyrics() != true) {
+                source = "LRCLIB"
+                result = lyricsFallbackClient.find(request)
+            }
+            val finalResult = result ?: LyricsState(LyricsStatus.NOT_FOUND)
+            log("Lyrics: $source ${finalResult.status} (${finalResult.lines.size} timed lines)")
+            synchronized(this@AirPlayService) {
+                if (lyricsKey == key) _lyrics.value = finalResult
+            }
+        }
+    }
+
+    private fun LyricsState.hasDisplayableLyrics(): Boolean = when (status) {
+        LyricsStatus.SYNCED,
+        LyricsStatus.PLAIN,
+        LyricsStatus.INSTRUMENTAL,
+        -> true
+        else -> false
     }
 
     fun togglePlayPause() {
@@ -695,6 +996,13 @@ class AirPlayService : Service(), RaopCallbackHandler {
             _progressBaseTime = 0
         }
         _updatePlaybackState()
+    }
+
+    private fun _markAudioPacketReceived() {
+        _lastAudioPacketAtMs = SystemClock.elapsedRealtime()
+        if (_audioOnly.value && !_playing.value) {
+            _setPlaying(true)
+        }
     }
 
     private fun _updatePlaybackState() {
@@ -812,7 +1120,8 @@ class AirPlayService : Service(), RaopCallbackHandler {
             this,
             NOTIFICATION_ID,
             buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         )
         foregroundStarted = true
     }
@@ -837,6 +1146,9 @@ class AirPlayService : Service(), RaopCallbackHandler {
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pi)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         if (isAudio) {
             builder.setContentTitle(info.title).setContentText(info.artist).setSubText(info.album)
@@ -849,7 +1161,11 @@ class AirPlayService : Service(), RaopCallbackHandler {
                 )
                 // transport action buttons
                 builder.addAction(android.R.drawable.ic_media_previous, "Prev", _mediaAction(ACTION_PREV))
-                builder.addAction(android.R.drawable.ic_media_pause, "Pause", _mediaAction(ACTION_PLAY_PAUSE))
+                builder.addAction(
+                    if (_playing.value) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                    if (_playing.value) "Pause" else "Play",
+                    _mediaAction(ACTION_PLAY_PAUSE)
+                )
                 builder.addAction(android.R.drawable.ic_media_next, "Next", _mediaAction(ACTION_NEXT))
             }
         } else {
@@ -910,5 +1226,8 @@ class AirPlayService : Service(), RaopCallbackHandler {
         // shared with dpad/double-tap seeks
         const val VIDEO_SEEK_STEP_MS = 10_000L
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
+        private const val AUDIO_PAUSE_WATCHDOG_INTERVAL_MS = 250L
+        private const val AUDIO_PAUSE_SILENCE_MS = 1_800L
+        private const val MAX_RETAINED_COVER_BYTES = 2 * 1024 * 1024
     }
 }

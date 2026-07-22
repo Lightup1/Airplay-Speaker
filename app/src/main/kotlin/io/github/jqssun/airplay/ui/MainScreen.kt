@@ -9,6 +9,7 @@ import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -31,7 +32,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -46,6 +51,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.lyrics.LyricsState
+import io.github.jqssun.airplay.lyrics.LyricsStatus
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.ui.gestures.BrightnessState
 import io.github.jqssun.airplay.ui.gestures.DoubleTapIndicator
@@ -91,6 +98,7 @@ fun MainScreen(
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
+    val tvUi = isTv()
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
@@ -508,6 +516,14 @@ fun MainScreen(
             onExitFullscreen = { fullscreen = false },
             onPip = onPip
         )
+    } else if (tvUi) {
+        TvMainScreen(
+            viewModel = viewModel,
+            video = video,
+            onFullscreen = { fullscreen = true },
+            onPip = onPip,
+            showAudioMode = audioOnly,
+        )
     } else {
         Scaffold(
             bottomBar = {
@@ -828,10 +844,41 @@ private fun HoldScanButton(
     onEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var scanning by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .size(48.dp)
             .clip(CircleShape)
+            .dpadFocus(CircleShape)
+            .onFocusChanged {
+                if (!it.hasFocus && scanning) {
+                    scanning = false
+                    onEnd()
+                }
+            }
+            .onPreviewKeyEvent { event ->
+                val select = event.key == Key.DirectionCenter ||
+                    event.key == Key.Enter || event.key == Key.NumPadEnter
+                if (!select) return@onPreviewKeyEvent false
+                when (event.type) {
+                    KeyEventType.KeyDown -> {
+                        if (!scanning) {
+                            scanning = true
+                            onBegin()
+                        }
+                        true
+                    }
+                    KeyEventType.KeyUp -> {
+                        if (scanning) {
+                            scanning = false
+                            onEnd()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .focusable()
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
                     onBegin()
@@ -863,127 +910,360 @@ private fun AudioMiniController(viewModel: MainViewModel, visible: Boolean, onCl
 
 @Composable
 @AndroidxOptIn(UnstableApi::class)
-private fun NowPlayingContent(viewModel: MainViewModel) {
+internal fun NowPlayingContent(
+    viewModel: MainViewModel,
+    onSettings: (() -> Unit)? = null,
+) {
     val track by viewModel.trackInfo.collectAsState()
+    val lyrics by viewModel.lyrics.collectAsState()
+    val audioPositionMs by viewModel.audioPositionMs.collectAsState()
+    val mint = Color(0xFF9EF2D0)
+    val violet = Color(0xFFA99BFF)
+    val paper = Color(0xFFF6F4FF)
+    val muted = Color(0xFFAAA8B8)
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFF242046), Color(0xFF11131E), Color(0xFF0A0B13))
+                )
+            )
+            .padding(horizontal = 34.dp, vertical = 24.dp)
     ) {
-        // cover art
-        Box(
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .aspectRatio(1f)
-                .fillMaxWidth(0.7f)
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(mint)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "AIRPLAY SPEAKER  ·  NOW PLAYING",
+                        color = paper,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (onSettings != null) {
+                        IconButton(
+                            onClick = onSettings,
+                            modifier = Modifier.dpadFocus(CircleShape),
+                        ) {
+                            Icon(Icons.Default.Settings, stringResource(R.string.tv_nav_settings), tint = paper)
+                        }
+                    }
+                    Surface(
+                        color = Color(0x2632E6B0),
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.border(1.dp, Color(0x559EF2D0), RoundedCornerShape(50))
+                    ) {
+                        Text(
+                            "LIVE AIRPLAY",
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            color = mint,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight(0.94f)
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFFB49AFA), Color(0xFF5B4C9C), Color(0xFF242046))
+                            )
+                        )
+                        .border(1.dp, Color(0x35FFFFFF), RoundedCornerShape(24.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (track.coverArt != null) {
+                        Image(
+                            bitmap = track.coverArt!!.asImageBitmap(),
+                            contentDescription = stringResource(R.string.cd_cover_art),
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.MusicNote,
+                            contentDescription = null,
+                            modifier = Modifier.size(92.dp),
+                            tint = Color.White.copy(alpha = 0.88f)
+                        )
+                        Text(
+                            "ALAC LOSSLESS",
+                            modifier = Modifier.align(Alignment.BottomStart).padding(22.dp),
+                            color = Color.White.copy(alpha = 0.75f),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(42.dp))
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = track.title.ifEmpty { stringResource(R.string.unknown_track) },
+                        color = paper,
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = buildString {
+                            append(track.artist.ifEmpty { "AirPlay Audio" })
+                            if (track.album.isNotEmpty()) append("  ·  ${track.album}")
+                        },
+                        color = muted,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    SyncedLyricsCard(
+                        lyrics = lyrics,
+                        positionMs = audioPositionMs,
+                        mint = mint,
+                        paper = paper,
+                        muted = muted,
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    val player = viewModel.dacpPlayer
+                    if (player != null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            PositionText(player, Modifier.padding(end = 10.dp))
+                            Box(Modifier.weight(1f)) { ProgressSlider(player) }
+                            DurationText(player, Modifier.padding(start = 10.dp))
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            HoldScanButton(
+                                icon = Icons.Default.FastRewind,
+                                contentDescription = stringResource(R.string.cd_rewind),
+                                onBegin = { viewModel.audioScanBegin(false) },
+                                onEnd = { viewModel.audioScanEnd() }
+                            )
+                            PreviousButton(player, modifier = Modifier.dpadFocus())
+                            Surface(
+                                color = mint,
+                                shape = CircleShape,
+                                modifier = Modifier.size(58.dp)
+                            ) {
+                                PlayPauseButton(
+                                    player,
+                                    modifier = Modifier.fillMaxSize().dpadFocus(CircleShape),
+                                    iconSize = 34.dp,
+                                )
+                            }
+                            NextButton(player, modifier = Modifier.dpadFocus())
+                            HoldScanButton(
+                                icon = Icons.Default.FastForward,
+                                contentDescription = stringResource(R.string.cd_fast_forward),
+                                onBegin = { viewModel.audioScanBegin(true) },
+                                onEnd = { viewModel.audioScanEnd() }
+                            )
+                            IconButton(onClick = { viewModel.audioVolumeDown() }, modifier = Modifier.dpadFocus()) {
+                                Icon(Icons.AutoMirrored.Rounded.VolumeDown, stringResource(R.string.cd_volume_down))
+                            }
+                            IconButton(onClick = { viewModel.audioMuteToggle() }, modifier = Modifier.dpadFocus()) {
+                                Icon(Icons.AutoMirrored.Rounded.VolumeOff, stringResource(R.string.cd_mute))
+                            }
+                            IconButton(onClick = { viewModel.audioVolumeUp() }, modifier = Modifier.dpadFocus()) {
+                                Icon(Icons.AutoMirrored.Rounded.VolumeUp, stringResource(R.string.cd_volume_up))
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x17FFFFFF))
+                            .border(1.dp, Color(0x25FFFFFF), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 15.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("CD", color = violet, fontWeight = FontWeight.Black)
+                        Spacer(Modifier.width(10.dp))
+                        Text("16-bit / 44.1 kHz  ·  Stereo ALAC", color = paper, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncedLyricsCard(
+    lyrics: LyricsState,
+    positionMs: Long,
+    mint: Color,
+    paper: Color,
+    muted: Color,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(124.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x1AFFFFFF))
+            .border(1.dp, Color(0x24FFFFFF), RoundedCornerShape(16.dp))
+            .padding(horizontal = 18.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (track.coverArt != null) {
-                Image(
-                    bitmap = track.coverArt!!.asImageBitmap(),
-                    contentDescription = stringResource(R.string.cd_cover_art),
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.MusicNote,
+                    Icons.Default.GraphicEq,
                     contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    tint = mint,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.lyrics_title),
+                    color = mint,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
                 )
             }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        // track info
-        Text(
-            text = track.title.ifEmpty { stringResource(R.string.unknown_track) },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        if (track.artist.isNotEmpty()) {
             Text(
-                text = track.artist,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (track.album.isNotEmpty()) {
-            Text(
-                text = track.album,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                stringResource(R.string.lyrics_source),
+                color = muted.copy(alpha = 0.75f),
+                style = MaterialTheme.typography.labelSmall,
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(5.dp))
 
-        val player = viewModel.dacpPlayer
-        if (player != null) {
-            // BottomControls' default row, minus its video-overlay gradient
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                PositionText(player, Modifier.padding(end = 8.dp))
-                Box(modifier = Modifier.weight(1f)) { ProgressSlider(player) }
-                DurationText(player, Modifier.padding(start = 8.dp))
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                HoldScanButton(
-                    icon = Icons.Default.FastRewind,
-                    contentDescription = stringResource(R.string.cd_rewind),
-                    onBegin = { viewModel.audioScanBegin(false) },
-                    onEnd = { viewModel.audioScanEnd() }
-                )
-                PreviousButton(player, modifier = Modifier.dpadFocus())
-                PlayPauseButton(
-                    player,
-                    modifier = Modifier.size(63.dp).dpadFocus(CircleShape),
-                    iconSize = 40.dp
-                )
-                NextButton(player, modifier = Modifier.dpadFocus())
-                HoldScanButton(
-                    icon = Icons.Default.FastForward,
-                    contentDescription = stringResource(R.string.cd_fast_forward),
-                    onBegin = { viewModel.audioScanBegin(true) },
-                    onEnd = { viewModel.audioScanEnd() }
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                IconButton(onClick = { viewModel.audioVolumeDown() }, modifier = Modifier.dpadFocus()) {
-                    Icon(Icons.AutoMirrored.Rounded.VolumeDown, stringResource(R.string.cd_volume_down))
-                }
-                IconButton(onClick = { viewModel.audioMuteToggle() }, modifier = Modifier.dpadFocus()) {
-                    Icon(Icons.AutoMirrored.Rounded.VolumeOff, stringResource(R.string.cd_mute))
-                }
-                IconButton(onClick = { viewModel.audioVolumeUp() }, modifier = Modifier.dpadFocus()) {
-                    Icon(Icons.AutoMirrored.Rounded.VolumeUp, stringResource(R.string.cd_volume_up))
+        when (lyrics.status) {
+            LyricsStatus.SYNCED -> {
+                val activeIndex = lyrics.lines.indexOfLast { it.timeMs <= positionMs }
+                val anchor = activeIndex.coerceAtLeast(0)
+                val start = (anchor - 1)
+                    .coerceAtLeast(0)
+                    .coerceAtMost((lyrics.lines.size - 3).coerceAtLeast(0))
+                lyrics.lines.drop(start).take(3).forEachIndexed { offset, line ->
+                    val index = start + offset
+                    val active = index == activeIndex
+                    Text(
+                        text = line.text.ifBlank { "♪" },
+                        color = if (active) mint else paper.copy(alpha = if (index > activeIndex) 0.76f else 0.42f),
+                        style = if (active) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    )
                 }
             }
+
+            LyricsStatus.PLAIN -> {
+                lyrics.plainLyrics.lineSequence()
+                    .filter { it.isNotBlank() }
+                    .take(3)
+                    .forEach { line ->
+                        Text(
+                            line,
+                            color = paper.copy(alpha = 0.72f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+            }
+
+            LyricsStatus.LOADING -> LyricsMessage(
+                text = stringResource(R.string.lyrics_searching),
+                color = paper,
+                showProgress = true,
+            )
+            LyricsStatus.INSTRUMENTAL -> LyricsMessage(
+                text = stringResource(R.string.lyrics_instrumental),
+                color = paper,
+            )
+            LyricsStatus.NOT_FOUND -> LyricsMessage(
+                text = stringResource(R.string.lyrics_not_found),
+                color = muted,
+            )
+            LyricsStatus.ERROR -> LyricsMessage(
+                text = stringResource(R.string.lyrics_error),
+                color = muted,
+            )
+            LyricsStatus.IDLE -> LyricsMessage(
+                text = stringResource(R.string.lyrics_waiting),
+                color = muted,
+            )
         }
+    }
+}
+
+@Composable
+private fun LyricsMessage(text: String, color: Color, showProgress: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        if (showProgress) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = color,
+                strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text, color = color, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Large, high-contrast safe zone for the Android TV launcher. -->
+    <path android:fillColor="#111217" android:pathData="M0,0h108v108h-108z" />
+    <path android:fillColor="#252832" android:pathData="M28,14C20.3,14 14,20.3 14,28v52c0,7.7 6.3,14 14,14h52c7.7,0 14,-6.3 14,-14V28c0,-7.7 -6.3,-14 -14,-14z" />
+    <path android:fillColor="#F4F5F8" android:pathData="M33,37c0,-4.4 3.6,-8 8,-8h10c4.4,0 8,3.6 8,8v34c0,4.4 -3.6,8 -8,8H41c-4.4,0 -8,-3.6 -8,-8z" />
+    <path android:fillColor="#111217" android:pathData="M46,40a9,9 0,1 0,0 18a9,9 0,1 0,0 -18M46,62a6.5,6.5 0,1 0,0 13a6.5,6.5 0,1 0,0 -13" />
+    <path android:fillColor="#9CE9D2" android:pathData="M65,38c8,6.4 8,25.6 0,32l4.2,4.2c11.6,-10.6 11.6,-29.8 0,-40.4zM73.5,29.5c14.7,12.1 14.7,36.9 0,49l4.2,4.2c18.5,-15.9 18.5,-41.5 0,-57.4z" />
+</vector>

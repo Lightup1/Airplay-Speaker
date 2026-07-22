@@ -39,6 +39,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val aacEnabled by viewModel.aacEnabled.collectAsState()
     val resolution by viewModel.resolution.collectAsState()
     val idlePreview by viewModel.idlePreview.collectAsState()
+    val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
@@ -186,6 +187,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_idle_preview_desc),
             checked = idlePreview,
             onCheckedChange = { viewModel.setIdlePreview(it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_motion_artwork),
+            description = stringResource(R.string.setting_motion_artwork_desc),
+            checked = motionArtworkEnabled,
+            onCheckedChange = { viewModel.setMotionArtworkEnabled(it) }
         )
 
         SettingSwitch(
