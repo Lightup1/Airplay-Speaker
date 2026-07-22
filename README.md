@@ -20,7 +20,7 @@
 
 Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. It plays lossless ALAC audio at CD quality, displays track metadata and album artwork, supports background playback and remote transport controls, and presents synchronized lyrics in a television-first 1920×1080 interface.
 
-**[Open the interactive website](https://airplay-speaker-tv-0722.worapornkummarn.chatgpt.site)** · **[Download the latest APK](https://github.com/l3kza08/Sonic-Cast/releases/latest)**
+**[Open the interactive website](https://l3kza08.github.io/airplay-speaker-web/)** · **[Download the latest APK](https://github.com/l3kza08/Sonic-Cast/releases/latest)**
 
 ## Demo
 
@@ -31,10 +31,10 @@ Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. I
 </p>
 
 <p align="center">
-  <a href="docs/media/SonicCastTV-demo.mp4"><strong>▶ Watch the 15-second 1080p demo</strong></a>
+  <a href="docs/media/SonicCastTV-demo.mp4"><strong>▶ Watch the v0.14.8 15-second 1080p demo</strong></a>
 </p>
 
-> The demo was captured from a real Android TV at 1920×1080 and 59.94 FPS. The recording has no audio.
+> The v0.14.8 demo was captured from a real Android TV at 1920×1080 and 59.94 FPS. The recording has no audio.
 
 ## Highlights
 
