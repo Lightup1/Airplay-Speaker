@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Airplay Speaker</string>
+
+    <!-- Notification -->
+    <string name="notification_channel">Airplay Speaker</string>
+    <string name="notification_title">Airplay Speaker is ready</string>
+    <string name="notification_text">Waiting for CD-quality AirPlay audio</string>
+    <string name="notification_pin_title">AirPlay PIN Required</string>
+    <string name="notification_pin_text">PIN: %1$s</string>
+    <string name="stop_service">Stop</string>
+
+    <!-- Tabs -->
+    <string name="tab_overview">Overview</string>
+    <string name="tab_logs">Logs</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- TV navigation and ten-foot UI -->
+    <string name="tv_nav_home">Home</string>
+    <string name="tv_nav_settings">Settings</string>
+    <string name="tv_back">Back</string>
+    <string name="setting_airplay_receiver">AirPlay receiver</string>
+    <string name="setting_airplay_receiver_desc">Make this TV available for AirPlay connections</string>
+    <string name="tv_nav_diagnostics">Diagnostics</string>
+    <string name="tv_receiver_label">TV RECEIVER</string>
+    <string name="tv_receiver_ready">Receiver ready</string>
+    <string name="tv_receiver_offline">Receiver offline</string>
+    <string name="tv_cd_quality">CD QUALITY</string>
+    <string name="tv_home_title">Airplay Speaker</string>
+    <string name="tv_home_subtitle">Lossless music, cover art and synchronized lyrics on the big screen</string>
+    <string name="tv_listening">LISTENING FOR AIRPLAY</string>
+    <string name="tv_receiver_stopped">RECEIVER STOPPED</string>
+    <string name="tv_connected_waiting">Connected — waiting for music to begin</string>
+    <string name="tv_ready_description">Ready as a dedicated AirPlay music speaker</string>
+    <string name="tv_background_chip">BACKGROUND READY</string>
+    <string name="tv_quick_connect">Quick connect</string>
+    <string name="tv_connect_step_1">Connect your Apple device and TV to the same network</string>
+    <string name="tv_connect_step_2">In Music or Control Center, choose “%1$s”</string>
+    <string name="tv_connect_step_3">Play music — artwork and lyrics appear automatically</string>
+    <string name="tv_speaker_mode_note">macOS Music compatible speaker mode is active</string>
+    <string name="tv_settings_title">TV Settings</string>
+    <string name="tv_settings_subtitle">Use the remote to change the essential receiver options</string>
+    <string name="tv_diagnostics_title">Diagnostics</string>
+    <string name="tv_diagnostics_subtitle">Connection activity from the AirPlay receiver</string>
+    <string name="tv_no_diagnostics">No receiver activity yet</string>
+
+    <!-- Overview -->
+    <string name="server_stopped">Server stopped</string>
+    <string name="waiting_for_connection">Waiting for connection...</string>
+    <string name="waiting_for_playback">Press start on the sender...</string>
+    <string name="error_starting_server">Error starting server</string>
+    <string name="connected_count">%d connected</string>
+    <string name="error_label">Error</string>
+    <string name="stopped_label">Stopped</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="unknown_track">Unknown</string>
+    <string name="lyrics_title">SYNCED LYRICS</string>
+    <string name="lyrics_source">LRCLIB</string>
+    <string name="lyrics_searching">Finding synchronized lyrics…</string>
+    <string name="lyrics_waiting">Waiting for track details…</string>
+    <string name="lyrics_not_found">No synchronized lyrics found for this track</string>
+    <string name="lyrics_error">Lyrics are temporarily unavailable</string>
+    <string name="lyrics_instrumental">Instrumental track</string>
+    <string name="lyrics_word_sync_exact">WORD SYNC · PRECISE</string>
+    <string name="lyrics_word_sync_smart">WORD SYNC · SMART</string>
+    <string name="lyrics_line_sync">LYRICS · LRCLIB</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_pip">Picture-in-Picture</string>
+    <string name="cd_fullscreen">Fullscreen</string>
+    <string name="cd_exit_fullscreen">Exit fullscreen</string>
+    <string name="cd_cover_art">Cover art</string>
+    <string name="cd_play_pause">Play/Pause</string>
+    <string name="cd_rewind">Rewind</string>
+    <string name="cd_fast_forward">Fast forward</string>
+    <string name="cd_volume_down">Volume down</string>
+    <string name="cd_volume_up">Volume up</string>
+    <string name="cd_mute">Mute</string>
+    <string name="cd_download">Download video</string>
+    <string name="cd_cancel_download">Cancel download</string>
+
+    <!-- Video download -->
+    <string name="download_saved">Saved to %1$s</string>
+    <string name="download_failed">Download failed</string>
+
+    <!-- Player gestures -->
+    <string name="gesture_seek_seconds">%1$d seconds</string>
+    <string name="seconds_short">%1$ds</string>
+    <string name="select_playback_speed">Playback speed</string>
+    <string name="cd_reset_speed">Reset speed</string>
+    <string name="skip_silence">Skip silence</string>
+
+    <!-- Player controls -->
+    <string name="cd_back">Back</string>
+    <string name="cd_copy_url">Copy video URL</string>
+    <string name="cd_rotate">Rotate screen</string>
+    <string name="cd_lock_controls">Lock controls</string>
+    <string name="cd_unlock_controls">Unlock controls</string>
+    <string name="scale_best_fit">Best fit</string>
+    <string name="scale_stretch">Stretch</string>
+    <string name="scale_crop">Crop</string>
+    <string name="scale_hundred_percent">100%</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_pin_title">AirPlay PIN</string>
+    <string name="btn_ok">OK</string>
+
+    <!-- Logs screen -->
+    <string name="btn_export">Export</string>
+    <string name="btn_clear">Clear</string>
+    <string name="export_logs_chooser_title">Export logs</string>
+
+    <!-- Settings sections -->
+    <string name="section_server">Server</string>
+    <string name="section_connection">Connection</string>
+    <string name="section_display">Display</string>
+    <string name="section_decode">Decode</string>
+    <string name="section_developer">Developer</string>
+
+    <!-- Settings: Server -->
+    <string name="setting_server_name">Server name</string>
+    <string name="setting_server_port">Server port</string>
+    <string name="setting_auto_start">Start server automatically</string>
+    <string name="setting_auto_start_desc">Start the AirPlay server when the app launches</string>
+    <string name="setting_boot_auto_start">Start server at boot</string>
+    <string name="setting_boot_auto_start_desc">Start the AirPlay server when the device starts</string>
+    <string name="setting_run_in_background">Run in background</string>
+    <string name="setting_run_in_background_desc">Keep AirPlay audio playing and the receiver available after leaving the app</string>
+    <string name="btn_save">Save</string>
+
+    <!-- Settings: Connection -->
+    <string name="setting_require_pin">Require PIN (Beta)</string>
+    <string name="setting_require_pin_desc">Require 4-digit PIN for each new connection</string>
+    <string name="setting_allow_new_conn">Allow new connections</string>
+    <string name="setting_allow_new_conn_desc">Drop current client when a new one connects</string>
+
+    <!-- Settings: Display -->
+    <string name="setting_idle_preview">Idle screen preview</string>
+    <string name="setting_idle_preview_desc">Show video surface while waiting for a connection</string>
+    <string name="setting_motion_artwork">Animated album artwork</string>
+    <string name="setting_motion_artwork_desc">Enable moving artwork and album motion effects when available</string>
+    <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
+    <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
+    <string name="setting_keep_screen_on">Keep screen on</string>
+    <string name="setting_keep_screen_on_desc">Prevent sleeping while a client is connected</string>
+    <string name="setting_advertise_video">Advertise AirPlay video support</string>
+    <string name="setting_advertise_video_desc">When off, the dedicated macOS Music compatible speaker is used</string>
+    <string name="setting_advertise_audio">Advertise AirPlay audio support</string>
+    <string name="setting_advertise_audio_desc">When off, the device can only be used for mirroring and will be hidden from media players</string>
+    <string name="setting_launch_on_connect">Open this application on connect</string>
+    <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
+    <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
+    <string name="setting_resolution">Resolution</string>
+    <string name="setting_resolution_desc">Video resolution advertised to clients</string>
+    <string name="setting_resolution_placeholder">[W]x[H]</string>
+    <string name="setting_resolution_auto">Auto</string>
+    <string name="setting_resolution_width">Width</string>
+    <string name="setting_resolution_height">Height</string>
+    <string name="setting_max_fps">Maximum FPS</string>
+    <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
+    <string name="setting_max_fps_placeholder">FPS</string>
+    <string name="setting_overscanned">Overscanned</string>
+    <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>
+    <string name="chip_custom">Custom</string>
+
+    <!-- Settings: Decode -->
+    <string name="setting_h265">H.265 (HEVC)</string>
+    <string name="setting_h265_desc">Enable H.265 video decoding if device supports it</string>
+    <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
+    <string name="setting_enforce_sdr_desc">Tag video as limited SDR; disable to allow HDR sources to pass through</string>
+    <string name="setting_alac">ALAC audio</string>
+    <string name="setting_alac_desc">ALAC codec for AirPlay music streaming</string>
+    <string name="setting_sw_alac">Software ALAC decoder</string>
+    <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
+    <string name="setting_aac">AAC audio</string>
+    <string name="setting_aac_desc">AAC-ELD or AAC-LC codec for screen mirroring audio</string>
+
+    <!-- Settings: Developer -->
+    <string name="setting_developer_options">Developer options</string>
+    <string name="setting_developer_options_desc">Show options for advanced users</string>
+    <string name="setting_key_allow_frame_drop">MediaFormat.KEY_ALLOW_FRAME_DROP</string>
+    <string name="setting_key_allow_frame_drop_desc">Allow video decoders to drop frames internally to keep up on Android 10+</string>
+    <string name="setting_realtime_decoder_priority">MediaFormat.KEY_PRIORITY</string>
+    <string name="setting_realtime_decoder_priority_desc">Request real-time scheduling for audio and video decoders</string>
+    <string name="setting_operating_rate_hint">MediaFormat.KEY_OPERATING_RATE</string>
+    <string name="setting_operating_rate_hint_desc">Request maximum operating rate for video decoder</string>
+    <string name="setting_scheduled_output_buffer_release">Aligned frame pacing</string>
+    <string name="setting_scheduled_output_buffer_release_desc">Schedule each decoded frame to the VSYNC matching its presentation timestamp</string>
+    <string name="setting_audio_delay">Override audio delay</string>
+    <string name="setting_audio_delay_desc">Set a custom audio latency reported to client</string>
+    <string name="audio_delay_value">%dms</string>
+    <string name="setting_audio_buffer_multiplier">Audio buffer size</string>
+    <string name="setting_audio_buffer_multiplier_desc">AudioTrack buffer size multiplier</string>
+    <string name="setting_audio_buffer_multiplier_value">%dx</string>
+    <string name="setting_debug_overlay">Show debug overlay</string>
+    <string name="setting_debug_overlay_desc">Overlay stream stats on video: codec, FPS, bitrate, jitter, frames, drops</string>
+    <string name="setting_benchmark_log">Enable debug logging</string>
+    <string name="setting_benchmark_log_desc">Log stream stats to logcat: codec, FPS, bitrate, jitter, frames, drops</string>
+
+    <!-- Debug overlay -->
+    <string name="debug_video">Video: %1$s %2$s</string>
+    <string name="debug_fps_bitrate">FPS: %1$d  Bitrate: %2$s</string>
+    <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d</string>
+    <string name="debug_jitter">Jitter: %1$s</string>
+    <string name="debug_audio">Audio: %1$s  Vol: %2$d%%</string>
+    <string name="debug_clients">Clients: %1$d</string>
+</resources>

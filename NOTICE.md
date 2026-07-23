@@ -1,6 +1,6 @@
-# Sonic Cast TV — Open-source notice
+# Airplay Speaker — Open-source notice
 
-Sonic Cast TV 0.11.0 is a modified distribution of **AirPlay Receiver for
+Airplay Speaker 0.14.8 is a modified distribution of **AirPlay Receiver for
 Android** by jqssun:
 
 - Project: https://github.com/jqssun/android-airplay-server
@@ -33,7 +33,7 @@ If available, that Apple-hosted HLS video and its corresponding normal album
 cover are loaded while the Now Playing screen is visible. The normal cover is
 used locally for palette extraction and the blended background. Neither motion
 artwork nor the normal cover is bundled in the application or persisted by
-Sonic Cast TV. If no motion artwork is published or the request fails, the
+Airplay Speaker. If no motion artwork is published or the request fails, the
 sender-provided static cover remains visible with a local animation.
 
 For the television word-following effect, LyricsPlus syllable timing and
@@ -52,5 +52,5 @@ small JNI adapter in `app/src/main/cpp/classic`. It is used by the default
 music-only mode so the Music app on macOS can connect through classic AirPlay
 and send 16-bit/44.1 kHz ALAC audio.
 
-Sonic Cast TV is not affiliated with or endorsed by Apple Inc. AirPlay is a
+Airplay Speaker is not affiliated with or endorsed by Apple Inc. AirPlay is a
 trademark of Apple Inc. DRM-protected content is not supported.

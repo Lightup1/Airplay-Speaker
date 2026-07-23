@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      This is the published, protocol-standard AirPort Express RAOP key used by
+      interoperable open-source receivers. It is not an application credential.
+    -->
+    <issue id="PackagedPrivateKey">
+        <ignore path="src/main/res/raw/airport_key.pem" />
+    </issue>
+</lint>
