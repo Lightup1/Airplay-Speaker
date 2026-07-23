@@ -14,13 +14,24 @@
   <img alt="Android TV 7.0+" src="https://img.shields.io/badge/Android%20TV-7.0%2B-3DDC84?logo=android&logoColor=white">
   <img alt="CD-quality audio" src="https://img.shields.io/badge/Audio-16--bit%20%2F%2044.1%20kHz-8B5CF6">
   <img alt="Kotlin and Compose" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white">
-  <img alt="Version 0.14.8" src="https://img.shields.io/badge/Version-0.14.8-ff765d">
+  <img alt="Version 0.14.13" src="https://img.shields.io/badge/Version-0.14.13-ff765d">
   <img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue">
 </p>
 
 Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. It plays lossless ALAC audio at CD quality, displays track metadata and album artwork, supports background playback and remote transport controls, and presents synchronized lyrics in a television-first 1920×1080 interface.
 
 **[Open the interactive website](https://l3kza08.github.io/airplay-speaker-web/)** · **[Download the latest APK](https://github.com/l3kza08/Sonic-Cast/releases/latest)**
+
+## What’s new in v0.14.13
+
+- **One-page lyrics transition** — hiding lyrics now moves the current artwork and metadata smoothly into the center instead of switching to a separate-looking screen.
+- **Browsable Up Next carousel** — previous, current, and upcoming tracks use equally sized artwork; use Left or Right to browse a sender-provided queue and OK to start the selected track.
+- **Cleaner lyrics control** — the small round lyrics button sits at the lower-right and hides after five seconds without remote input.
+- **Context only when lyrics are hidden** — the `NOW PLAYING` label and selected white outline appear only in the artwork carousel view.
+- **Smoother visual motion** — album-color background fields and motion artwork have been tuned for more fluid playback on Android TV devices with 2 GB of RAM.
+- **More reliable queue parsing** — repeated DACP queue records are preserved, preventing missing or duplicated items when compatible senders expose their play queue.
+
+> Queue browsing depends on the AirPlay sender exposing its DACP play queue. When it is unavailable, the current track remains centered without inventing unavailable tracks.
 
 ## Demo
 
@@ -86,7 +97,7 @@ Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. I
 
 ```bash
 adb connect <ANDROID_TV_IP>:5555
-adb install -r Airplay-Speaker-v0.14.8.apk
+adb install -r Airplay-Speaker-v0.14.13.apk
 ```
 
 The application appears in the Android TV app launcher as **Airplay Speaker**.

@@ -32,6 +32,7 @@ object Prefs {
     const val BENCHMARK_LOG = "benchmark_log"; const val DEF_BENCHMARK_LOG = false
     const val IDLE_PREVIEW = "idle_preview"; const val DEF_IDLE_PREVIEW = false
     const val MOTION_ARTWORK_ENABLED = "motion_artwork_enabled"; const val DEF_MOTION_ARTWORK_ENABLED = true
+    const val LYRICS_VISIBLE = "lyrics_visible"; const val DEF_LYRICS_VISIBLE = true
     const val AUTO_FULLSCREEN = "auto_fullscreen"; const val DEF_AUTO_FULLSCREEN = true
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true
     const val ADVERTISE_VIDEO = "advertise_video"; const val DEF_ADVERTISE_VIDEO = false

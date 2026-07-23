@@ -57,7 +57,7 @@ class LyricsPlusClient {
     companion object {
         private const val BASE_URL = "https://lyricsplus.prjktla.my.id"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.8 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
 
         internal fun parseResponse(value: String): LyricsState? {
             val root = runCatching { JSONObject(value) }.getOrNull() ?: return null

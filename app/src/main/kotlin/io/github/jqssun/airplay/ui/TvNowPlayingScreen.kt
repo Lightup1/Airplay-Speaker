@@ -9,7 +9,12 @@ import android.graphics.RadialGradient as AndroidRadialGradient
 import android.graphics.Shader as AndroidShader
 import android.view.TextureView
 import android.view.KeyEvent as AndroidKeyEvent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -25,6 +30,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +55,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +82,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -110,7 +118,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.lyrics.LyricAlignment
 import io.github.jqssun.airplay.lyrics.LyricLine
 import io.github.jqssun.airplay.lyrics.LyricsState
@@ -127,6 +137,8 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
+private const val LYRICS_BUTTON_HIDE_DELAY_MS = 5_000L
+
 /** Dedicated ten-foot Now Playing surface, proportioned around a 1920 x 1080 canvas. */
 @Composable
 internal fun TvNowPlayingScreen(
@@ -139,6 +151,9 @@ internal fun TvNowPlayingScreen(
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
     val animatedArtworkUrl by viewModel.animatedArtworkUrl.collectAsState()
     val animatedArtworkCover by viewModel.animatedArtworkCover.collectAsState()
+    val lyricsVisible by viewModel.lyricsVisible.collectAsState()
+    val previousTrack by viewModel.previousTrack.collectAsState()
+    val upNextTracks by viewModel.upNextTracks.collectAsState()
     val displayArtwork = if (motionArtworkEnabled) animatedArtworkCover ?: track.coverArt else track.coverArt
     val extracted = remember(displayArtwork) { extractArtworkPalette(displayArtwork) }
     val primary by animateColorAsState(extracted.primary, tween(1_400), label = "artPrimary")
@@ -148,11 +163,48 @@ internal fun TvNowPlayingScreen(
     val paper = Color(0xFFF9F8FB)
     val muted = paper.copy(alpha = 0.56f)
     val rootFocus = remember { FocusRequester() }
+    val lyricsButtonFocus = remember { FocusRequester() }
     var lyricBrowseSignal by remember { mutableIntStateOf(0) }
     var lyricBrowseDirection by remember { mutableIntStateOf(0) }
+    var queueSelection by remember { mutableIntStateOf(0) }
+    var lyricsButtonFocused by remember { mutableStateOf(false) }
+    var lyricsButtonShown by remember { mutableStateOf(true) }
+    var lyricsButtonActivity by remember { mutableLongStateOf(0L) }
+    var lyricsButtonFocusPending by remember { mutableStateOf(false) }
+    val minimumQueueSelection = if (previousTrack != null) -1 else 0
+    val maximumQueueSelection = upNextTracks.size
 
     LaunchedEffect(Unit) {
         runCatching { rootFocus.requestFocus() }
+    }
+    LaunchedEffect(track.title, track.artist, track.album) {
+        queueSelection = 0
+    }
+    LaunchedEffect(lyricsVisible) {
+        if (lyricsVisible) queueSelection = 0
+    }
+    LaunchedEffect(minimumQueueSelection, maximumQueueSelection) {
+        queueSelection = queueSelection.coerceIn(minimumQueueSelection, maximumQueueSelection)
+    }
+    LaunchedEffect(queueSelection, lyricsVisible) {
+        if (!lyricsVisible && queueSelection > 0) {
+            viewModel.prefetchQueueArtwork(queueSelection - 1)
+        }
+    }
+    LaunchedEffect(lyricsButtonActivity) {
+        delay(LYRICS_BUTTON_HIDE_DELAY_MS)
+        lyricsButtonFocusPending = false
+        runCatching { rootFocus.requestFocus() }
+        lyricsButtonShown = false
+    }
+    LaunchedEffect(lyricsButtonShown, lyricsButtonFocusPending) {
+        if (lyricsButtonShown && lyricsButtonFocusPending) {
+            // AnimatedVisibility must attach the focus target before the
+            // request, especially when the first key wakes a hidden button.
+            withFrameNanos { }
+            runCatching { lyricsButtonFocus.requestFocus() }
+            lyricsButtonFocusPending = false
+        }
     }
 
     BoxWithConstraints(
@@ -162,20 +214,66 @@ internal fun TvNowPlayingScreen(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                lyricsButtonShown = true
+                lyricsButtonActivity++
                 when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_MENU -> {
                         onSettings()
                         true
                     }
-                    AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                        lyricBrowseDirection = -1
-                        lyricBrowseSignal++
+                    AndroidKeyEvent.KEYCODE_CAPTIONS -> {
+                        viewModel.setLyricsVisible(!lyricsVisible)
                         true
                     }
-                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        lyricBrowseDirection = 1
-                        lyricBrowseSignal++
+                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (lyricsVisible) {
+                            lyricsButtonFocusPending = true
+                        } else {
+                            runCatching { rootFocus.requestFocus() }
+                            queueSelection = (queueSelection + 1).coerceAtMost(maximumQueueSelection)
+                        }
                         true
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        runCatching { rootFocus.requestFocus() }
+                        if (!lyricsVisible) {
+                            queueSelection = (queueSelection - 1).coerceAtLeast(minimumQueueSelection)
+                        }
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                        if (lyricsVisible) {
+                            lyricBrowseDirection = -1
+                            lyricBrowseSignal++
+                            true
+                        } else {
+                            runCatching { rootFocus.requestFocus() }
+                            true
+                        }
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (lyricsVisible) {
+                            lyricBrowseDirection = 1
+                            lyricBrowseSignal++
+                            true
+                        } else {
+                            lyricsButtonFocusPending = true
+                            true
+                        }
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+                    AndroidKeyEvent.KEYCODE_ENTER,
+                    AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
+                    AndroidKeyEvent.KEYCODE_BUTTON_A -> {
+                        if (!lyricsVisible && !lyricsButtonFocused) {
+                            when {
+                                queueSelection < 0 -> viewModel.playPreviousQueueTrack()
+                                queueSelection > 0 -> viewModel.playQueuedTrack(queueSelection)
+                            }
+                            queueSelection != 0
+                        } else {
+                            false
+                        }
                     }
                     else -> false
                 }
@@ -190,34 +288,53 @@ internal fun TvNowPlayingScreen(
             dark = extracted.dark,
         )
 
-        Row(
+        val queueLayoutProgress by animateFloatAsState(
+            targetValue = if (lyricsVisible) 0f else 1f,
+            animationSpec = spring(
+                dampingRatio = 0.86f,
+                stiffness = Spring.StiffnessLow,
+            ),
+            label = "queueLayoutProgress",
+        )
+
+        // This queue row never leaves composition. The current motion cover
+        // therefore keeps the same decoder surface while it travels from the
+        // lyric layout into the centred queue layout.
+        NoLyricsQueueStage(
+            current = track,
+            currentArtwork = displayArtwork,
+            animatedArtworkUrl = animatedArtworkUrl.takeIf { motionArtworkEnabled },
+            previous = previousTrack,
+            upNext = upNextTracks,
+            selectedOffset = queueSelection,
+            sideCardsVisibility = queueLayoutProgress,
+            primary = primary,
+            secondary = secondary,
+            paper = paper,
+            muted = muted,
+            scale = scale,
+            playing = playing,
+            artworkMotionEnabled = motionArtworkEnabled,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationX = -340f * scale * (1f - queueLayoutProgress) * density
+                },
+        )
+
+        AnimatedVisibility(
+            visible = lyricsVisible,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(
-                    start = (54f * scale).dp,
+                    start = (430f * scale).dp,
                     end = (54f * scale).dp,
                     top = (30f * scale).dp,
                     bottom = (30f * scale).dp,
                 ),
-            verticalAlignment = Alignment.CenterVertically,
+            enter = fadeIn(tween(420)) + slideInHorizontally(tween(520)) { it / 12 },
+            exit = fadeOut(tween(280)) + slideOutHorizontally(tween(380)) { it / 14 },
         ) {
-            MinimalArtworkColumn(
-                artwork = displayArtwork,
-                animatedArtworkUrl = animatedArtworkUrl.takeIf { motionArtworkEnabled },
-                title = track.title.ifBlank { stringResource(R.string.unknown_track) },
-                artist = track.artist.ifBlank { "AirPlay Audio" },
-                album = track.album,
-                primary = primary,
-                secondary = secondary,
-                paper = paper,
-                muted = muted,
-                scale = scale,
-                playing = playing,
-                artworkMotionEnabled = motionArtworkEnabled,
-            )
-
-            Spacer(Modifier.width((68f * scale).dp))
-
             DisplaySyncedLyricsStage(
                 lyrics = lyrics,
                 viewModel = viewModel,
@@ -230,11 +347,289 @@ internal fun TvNowPlayingScreen(
                 playing = playing,
                 browseSignal = lyricBrowseSignal,
                 browseDirection = lyricBrowseDirection,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
+                modifier = Modifier.fillMaxSize(),
             )
         }
+
+        AnimatedVisibility(
+            visible = lyricsButtonShown,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = (27f * scale).dp, bottom = (24f * scale).dp),
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(280)),
+        ) {
+            LyricsVisibilityButton(
+                visible = lyricsVisible,
+                scale = scale,
+                paper = paper,
+                focusRequester = lyricsButtonFocus,
+                onClick = {
+                    lyricsButtonShown = true
+                    lyricsButtonActivity++
+                    viewModel.setLyricsVisible(!lyricsVisible)
+                },
+                onFocusedChange = { lyricsButtonFocused = it },
+            )
+        }
+    }
+}
+
+@Composable
+private fun NoLyricsQueueStage(
+    current: TrackInfo,
+    currentArtwork: Bitmap?,
+    animatedArtworkUrl: String?,
+    previous: TrackInfo?,
+    upNext: List<TrackInfo>,
+    selectedOffset: Int,
+    sideCardsVisibility: Float,
+    primary: Color,
+    secondary: Color,
+    paper: Color,
+    muted: Color,
+    scale: Float,
+    playing: Boolean,
+    artworkMotionEnabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var lastOffset by remember { mutableIntStateOf(selectedOffset) }
+    val slideIn = remember { Animatable(0f) }
+    LaunchedEffect(selectedOffset) {
+        val direction = (selectedOffset - lastOffset).coerceIn(-1, 1)
+        lastOffset = selectedOffset
+        if (direction != 0) {
+            slideIn.snapTo(direction * 34f)
+            slideIn.animateTo(0f, tween(330, easing = FastOutSlowInEasing))
+        }
+    }
+
+    fun trackAt(offset: Int): TrackInfo? = when {
+        offset < 0 -> previous
+        offset == 0 -> current.copy(coverArt = currentArtwork)
+        else -> upNext.getOrNull(offset - 1)
+    }
+
+    fun labelAt(offset: Int): String = when {
+        offset < 0 -> "PREVIOUS"
+        offset == 0 -> "NOW PLAYING"
+        else -> "UP NEXT  •  $offset"
+    }
+
+    Row(
+        modifier = modifier
+            .padding(horizontal = (30f * scale).dp)
+            .graphicsLayer {
+                translationX = slideIn.value * scale * density
+            },
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        (selectedOffset - 1..selectedOffset + 1).forEachIndexed { slot, offset ->
+            val valid = offset in (if (previous != null) -1 else 0)..upNext.size
+            EqualQueueTrackCard(
+                label = if (valid) labelAt(offset) else if (offset < 0) "START OF QUEUE" else "END OF QUEUE",
+                track = trackAt(offset).takeIf { valid },
+                selected = slot == 1,
+                isCurrent = offset == 0,
+                visibility = if (slot == 1) 1f else sideCardsVisibility,
+                decorationVisibility = sideCardsVisibility,
+                emergeDirection = slot - 1,
+                animatedArtworkUrl = animatedArtworkUrl.takeIf { offset == 0 && artworkMotionEnabled },
+                primary = primary,
+                secondary = secondary,
+                paper = paper,
+                muted = muted,
+                scale = scale,
+                playing = playing,
+            )
+            if (slot < 2) Spacer(Modifier.width((18f * scale).dp))
+        }
+    }
+}
+
+@Composable
+private fun EqualQueueTrackCard(
+    label: String,
+    track: TrackInfo?,
+    selected: Boolean,
+    isCurrent: Boolean,
+    visibility: Float,
+    decorationVisibility: Float,
+    emergeDirection: Int,
+    animatedArtworkUrl: String?,
+    primary: Color,
+    secondary: Color,
+    paper: Color,
+    muted: Color,
+    scale: Float,
+    playing: Boolean,
+) {
+    val artSize = (270f * scale).dp
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (selected) 1f else 0.68f,
+        animationSpec = tween(220),
+        label = "queueCardAlpha",
+    )
+    Column(
+        modifier = Modifier
+            .width((292f * scale).dp)
+            .graphicsLayer {
+                alpha = cardAlpha * visibility
+                val emergeScale = 0.9f + (0.1f * visibility)
+                scaleX = emergeScale
+                scaleY = emergeScale
+                translationX = -emergeDirection * 72f * (1f - visibility) * scale * density
+                translationY = ((if (selected) 0f else 9f) + 18f * (1f - visibility)) * scale * density
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = label,
+            color = muted.copy(alpha = 0.72f),
+            fontSize = (10f * scale).sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (1.8f * scale).sp,
+            maxLines = 1,
+            modifier = Modifier.graphicsLayer { alpha = decorationVisibility },
+        )
+        Spacer(Modifier.height((8f * scale).dp))
+        Box(
+            modifier = Modifier
+                .size(artSize)
+                .shadow((18f * scale).dp, RoundedCornerShape((13f * scale).dp))
+                .clip(RoundedCornerShape((13f * scale).dp))
+                .background(Brush.linearGradient(listOf(primary, secondary)))
+                .border(
+                    (if (selected) 2f else 0.7f).times(scale).dp,
+                    Color.White.copy(
+                        alpha = (if (selected) 0.7f else 0.16f) * decorationVisibility,
+                    ),
+                    RoundedCornerShape((13f * scale).dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (isCurrent) {
+                MotionAlbumArtwork(
+                    artwork = track?.coverArt,
+                    motionUrl = animatedArtworkUrl,
+                    paper = paper,
+                    scale = scale,
+                    playing = playing,
+                )
+            } else if (track?.coverArt != null) {
+                Image(
+                    bitmap = track.coverArt.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.MusicNote,
+                    contentDescription = null,
+                    tint = paper.copy(alpha = 0.72f),
+                    modifier = Modifier.size((48f * scale).dp),
+                )
+            }
+        }
+        Spacer(Modifier.height((12f * scale).dp))
+        BouncingFadingText(
+            text = track?.title?.takeIf { it.isNotBlank() } ?: "No more songs",
+            color = paper.copy(alpha = if (track == null) 0.56f else 0.86f),
+            style = TextStyle(
+                fontSize = (18f * scale).sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+            leading = if (isCurrent && track != null) {
+                {
+                    MiniNowPlayingEqualizer(
+                        color = mix(primary, Color.White, 0.58f),
+                        scale = scale,
+                        playing = playing,
+                    )
+                    Spacer(Modifier.width((5f * scale).dp))
+                }
+            } else {
+                null
+            },
+        )
+        Spacer(Modifier.height((2f * scale).dp))
+        BouncingFadingText(
+            text = track?.artist?.takeIf { it.isNotBlank() } ?: "",
+            color = muted.copy(alpha = 0.76f),
+            style = TextStyle(
+                fontSize = (12f * scale).sp,
+                textAlign = TextAlign.Center,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!track?.album.isNullOrBlank()) {
+            Spacer(Modifier.height((1f * scale).dp))
+            BouncingFadingText(
+                text = track?.album.orEmpty(),
+                color = muted.copy(alpha = 0.54f),
+                style = TextStyle(
+                    fontSize = (9f * scale).sp,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsVisibilityButton(
+    visible: Boolean,
+    scale: Float,
+    paper: Color,
+    focusRequester: FocusRequester,
+    onClick: () -> Unit,
+    onFocusedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val background by animateColorAsState(
+        targetValue = when {
+            focused -> paper
+            visible -> paper.copy(alpha = 0.22f)
+            else -> Color.Black.copy(alpha = 0.24f)
+        },
+        animationSpec = tween(180),
+        label = "lyricsButtonBackground",
+    )
+    val tint by animateColorAsState(
+        targetValue = if (focused) Color(0xFF17171B) else paper.copy(alpha = 0.9f),
+        animationSpec = tween(180),
+        label = "lyricsButtonTint",
+    )
+    Box(
+        modifier = modifier
+            .size((43f * scale).dp)
+            .focusRequester(focusRequester)
+            .onFocusChanged {
+                focused = it.isFocused
+                onFocusedChange(it.isFocused)
+            }
+            .clip(CircleShape)
+            .background(background)
+            .border(
+                width = if (focused) (2f * scale).dp else (0.8f * scale).dp,
+                color = if (focused) paper.copy(alpha = 0.68f) else paper.copy(alpha = 0.2f),
+                shape = CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Lyrics,
+            contentDescription = if (visible) "Hide lyrics" else "Show lyrics",
+            tint = tint,
+            modifier = Modifier.size((21f * scale).dp),
+        )
     }
 }
 
@@ -252,7 +647,7 @@ private fun BlendedArtworkBackdrop(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(24_000, easing = LinearEasing),
+            animation = tween(30_000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "ambientPhase",
@@ -270,10 +665,32 @@ private fun BlendedArtworkBackdrop(
                 .fillMaxSize()
                 .graphicsLayer {
                     val angle = phase.value * (2f * PI.toFloat())
-                    scaleX = 1.12f
-                    scaleY = 1.12f
-                    translationX = 18f * cos(angle)
-                    translationY = 13f * sin(angle * 0.82f)
+                    val breathe = 0.035f * sin(angle * 0.72f)
+                    scaleX = 1.18f + breathe
+                    scaleY = 1.18f + breathe
+                    translationX = 44f * cos(angle)
+                    translationY = 30f * sin(angle * 0.82f)
+                    rotationZ = 1.1f * sin(angle * 0.64f)
+                },
+        )
+        // A second, translucent copy drifts in the opposite direction. Both
+        // layers reuse the same 384 x 216 bitmap, so the richer motion costs
+        // very little memory on entry-level Android TV hardware.
+        Image(
+            bitmap = ambientBitmap.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val angle = phase.value * (2f * PI.toFloat()) + PI.toFloat() * 0.68f
+                    val breathe = 0.045f * cos(angle * 0.58f)
+                    alpha = 0.3f
+                    scaleX = 1.32f + breathe
+                    scaleY = 1.32f + breathe
+                    translationX = -38f * sin(angle * 0.76f)
+                    translationY = 34f * cos(angle)
+                    rotationZ = -1.4f * cos(angle * 0.61f)
                 },
         )
         Box(
@@ -752,16 +1169,25 @@ private fun LoopingMotionArtwork(
         // audio/lyrics or consume a large share of a 2 GB TV's memory.
         val compactLoadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 1_500,
-                /* maxBufferMs = */ 8_000,
-                /* bufferForPlaybackMs = */ 400,
-                /* bufferForPlaybackAfterRebufferMs = */ 900,
+                /* minBufferMs = */ 2_500,
+                /* maxBufferMs = */ 10_000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_200,
             )
-            .setTargetBufferBytes(4 * 1024 * 1024)
+            .setTargetBufferBytes(6 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
+        val compactTrackSelector = DefaultTrackSelector(context).apply {
+            setParameters(
+                buildUponParameters()
+                    // The artwork is displayed below this size on a 1080p TV;
+                    // a 720px rendition avoids wasting decoder bandwidth.
+                    .setMaxVideoSize(720, 720)
+            )
+        }
         ExoPlayer.Builder(context)
             .setLoadControl(compactLoadControl)
+            .setTrackSelector(compactTrackSelector)
             .build()
             .apply {
             volume = 0f
@@ -799,9 +1225,14 @@ private fun LoopingMotionArtwork(
         androidx.compose.runtime.key(url) {
             AndroidView(
                 factory = { viewContext ->
-                    TextureView(viewContext).also(player::setVideoTextureView)
+                    TextureView(viewContext).also { texture ->
+                        texture.isOpaque = true
+                        player.setVideoTextureView(texture)
+                    }
                 },
-                update = player::setVideoTextureView,
+                // Rebinding the TextureView on every Compose update can reset
+                // the decoder surface and produce visible micro-stutters.
+                update = {},
                 modifier = modifier.alpha(videoAlpha),
             )
         }

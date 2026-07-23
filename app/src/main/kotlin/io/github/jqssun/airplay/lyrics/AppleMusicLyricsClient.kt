@@ -97,7 +97,7 @@ class AppleMusicLyricsClient {
         private const val ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
         private const val LYRICS_URL = "https://lyrics.paxsenix.org/apple-music/lyrics"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.8 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
         private const val MAX_SEARCH_BYTES = 1024 * 1024
         private const val MAX_LYRICS_BYTES = 768 * 1024
         private const val CACHE_ENTRIES = 12

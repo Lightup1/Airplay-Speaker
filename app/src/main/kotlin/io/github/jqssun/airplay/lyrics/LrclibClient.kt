@@ -234,7 +234,7 @@ class LrclibClient {
     companion object {
         private const val BASE_URL = "https://lrclib.net"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.8 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
 
         private const val MAX_LYRIC_LINES = 750
         private const val MAX_WORDS_PER_LINE = 120

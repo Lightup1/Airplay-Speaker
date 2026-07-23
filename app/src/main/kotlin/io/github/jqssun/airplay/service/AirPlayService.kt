@@ -841,6 +841,22 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
             _resetLyrics()
         }
         _trackInfo.value = info
+        if (isNewTrack) {
+            // Apple Music usually updates its DACP queue just after the DMAP
+            // metadata packet. Ask immediately, then once more after that
+            // short hand-off so Previous / Up Next does not show stale rows.
+            dacpController?.refreshQueue(info)
+            serviceScope.launch {
+                delay(900L)
+                val current = _trackInfo.value
+                if (current.title == info.title &&
+                    current.artist == info.artist &&
+                    current.album == info.album
+                ) {
+                    dacpController?.refreshQueue(current)
+                }
+            }
+        }
         if (info.durationMs > 0) _durationMs.value = info.durationMs
         _requestLyricsIfReady()
         _updateMediaMetadata()

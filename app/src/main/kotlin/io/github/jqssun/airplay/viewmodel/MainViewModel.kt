@@ -14,6 +14,7 @@ import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.artwork.AnimatedArtworkRequest
 import io.github.jqssun.airplay.artwork.AppleMusicArtworkClient
 import io.github.jqssun.airplay.artwork.RemoteArtworkLoader
+import io.github.jqssun.airplay.audio.DacpQueueState
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.service.AirPlayService
@@ -74,6 +75,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     }
     fun audioScanEnd() { service?.dacpController?.playResume() }
     fun audioMuteToggle() { service?.dacpController?.muteToggle() }
+    fun playPreviousQueueTrack() { service?.dacpController?.prevItem() }
+    fun playQueuedTrack(relativeIndex: Int) {
+        if (relativeIndex > 0) service?.dacpController?.playQueueItem(relativeIndex)
+    }
     fun sampleAudioPositionMs(): Long {
         val activeService = service
         return if (activeService?.audioOnly?.value == true) {
@@ -170,6 +175,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     )
     val motionArtworkEnabled: StateFlow<Boolean> = _motionArtworkEnabled.asStateFlow()
 
+    private val _lyricsVisible = MutableStateFlow(
+        prefs.getBoolean(Prefs.LYRICS_VISIBLE, Prefs.DEF_LYRICS_VISIBLE)
+    )
+    val lyricsVisible: StateFlow<Boolean> = _lyricsVisible.asStateFlow()
+
     private val _autoFullscreen = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_FULLSCREEN, Prefs.DEF_AUTO_FULLSCREEN))
     val autoFullscreen: StateFlow<Boolean> = _autoFullscreen.asStateFlow()
 
@@ -263,6 +273,17 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo: StateFlow<TrackInfo> = _trackInfo.asStateFlow()
+
+    private val _previousTrack = MutableStateFlow<TrackInfo?>(null)
+    val previousTrack: StateFlow<TrackInfo?> = _previousTrack.asStateFlow()
+
+    private val _nextTrack = MutableStateFlow<TrackInfo?>(null)
+    val nextTrack: StateFlow<TrackInfo?> = _nextTrack.asStateFlow()
+    private val _upNextTracks = MutableStateFlow<List<TrackInfo>>(emptyList())
+    val upNextTracks: StateFlow<List<TrackInfo>> = _upNextTracks.asStateFlow()
+    private var localPreviousTrack: TrackInfo? = null
+    private var queueArtworkKey = ""
+    private var queueArtworkJob: Job? = null
 
     private val _lyrics = MutableStateFlow(LyricsState())
     val lyrics: StateFlow<LyricsState> = _lyrics.asStateFlow()
@@ -417,6 +438,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _animatedArtworkCover.value = null
         }
     }
+    fun setLyricsVisible(v: Boolean) {
+        _lyricsVisible.value = v
+        prefs.edit().putBoolean(Prefs.LYRICS_VISIBLE, v).apply()
+    }
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
     fun setAdvertiseVideo(v: Boolean) { _advertiseVideo.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_VIDEO, v).apply(); _applyByServerRestart() }
@@ -447,6 +472,12 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         animatedArtworkKey = ""
         _animatedArtworkUrl.value = null
         _animatedArtworkCover.value = null
+        queueArtworkJob?.cancel()
+        queueArtworkJob = null
+        queueArtworkKey = ""
+        _previousTrack.value = null
+        _nextTrack.value = null
+        _upNextTracks.value = emptyList()
     }
 
     fun startServer() {
@@ -603,8 +634,13 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             }
             _mirroringActive.value = it.mirroringActive.value
             val nextTrack = it.trackInfo.value
+            val priorTrack = _trackInfo.value
+            if (!priorTrack.sameSongAs(nextTrack) && priorTrack.title.isNotBlank()) {
+                localPreviousTrack = priorTrack
+            }
             _trackInfo.value = nextTrack
             requestAnimatedArtworkIfNeeded(nextTrack)
+            updateQueueTracks(it.dacpController?.queue?.value ?: DacpQueueState(), nextTrack)
             _lyrics.value = it.lyrics.value
             _audioPositionMs.value = if (it.audioOnly.value) it.currentPositionMs() else 0L
             _audioPlaying.value = it.audioOnly.value && it.playing.value
@@ -613,6 +649,83 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             }
         }
     }
+
+    private fun updateQueueTracks(queue: DacpQueueState, current: TrackInfo) {
+        val previous = queue.previous?.takeUnless { it.sameSongAs(current) } ?: localPreviousTrack
+        val existingArtwork = _upNextTracks.value.associateBy { it.identityKey() }
+        val rawUpcoming = if (queue.upNext.firstOrNull()?.sameSongAs(current) == true) {
+            queue.upNext.drop(1)
+        } else {
+            queue.upNext
+        }
+        val upcoming = rawUpcoming.map { queuedTrack ->
+            val existing = existingArtwork[queuedTrack.identityKey()]
+            if (existing?.coverArt != null) queuedTrack.copy(coverArt = existing.coverArt) else queuedTrack
+        }
+        val key = buildList {
+            add(previous.identityKey())
+            addAll(upcoming.map { it.identityKey() })
+        }.joinToString("\u0001")
+        if (key == queueArtworkKey) return
+        queueArtworkKey = key
+        queueArtworkJob?.cancel()
+
+        _previousTrack.value = previous
+        _upNextTracks.value = upcoming
+        _nextTrack.value = upcoming.firstOrNull()
+        prefetchQueueArtwork(0)
+    }
+
+    /** Loads only the selected card and its neighbours to stay light on 2 GB TVs. */
+    fun prefetchQueueArtwork(centerIndex: Int) {
+        val key = queueArtworkKey
+        if (key.isBlank()) return
+        queueArtworkJob?.cancel()
+        queueArtworkJob = viewModelScope.launch {
+            val previousWithArt = loadQueueArtwork(_previousTrack.value)
+            if (queueArtworkKey != key) return@launch
+            _previousTrack.value = previousWithArt
+
+            val initial = _upNextTracks.value
+            if (initial.isEmpty()) return@launch
+            val indices = initial.indices
+                .filter { kotlin.math.abs(it - centerIndex) <= QUEUE_ARTWORK_RADIUS }
+                .sortedBy { kotlin.math.abs(it - centerIndex) }
+            for (index in indices) {
+                val before = _upNextTracks.value.getOrNull(index) ?: continue
+                val withArtwork = loadQueueArtwork(before) ?: continue
+                if (queueArtworkKey != key) return@launch
+                val latest = _upNextTracks.value.toMutableList()
+                if (latest.getOrNull(index)?.identityKey() != before.identityKey()) continue
+                latest[index] = withArtwork
+                _upNextTracks.value = latest
+                _nextTrack.value = latest.firstOrNull()
+            }
+        }
+    }
+
+    private suspend fun loadQueueArtwork(track: TrackInfo?): TrackInfo? {
+        if (track == null || track.coverArt != null || track.title.isBlank() || track.artist.isBlank()) {
+            return track
+        }
+        val artworkUrl = animatedArtworkClient.findStaticArtwork(
+            AnimatedArtworkRequest(
+                title = track.title,
+                artist = track.artist,
+                album = track.album,
+                durationMs = track.durationMs,
+            )
+        ) ?: return track
+        return track.copy(coverArt = remoteArtworkLoader.load(artworkUrl, targetEdgePx = 512))
+    }
+
+    private fun TrackInfo?.identityKey(): String = this?.let {
+        listOf(it.title, it.artist, it.album)
+            .joinToString("\u0000") { value -> value.trim().lowercase(Locale.ROOT) }
+    }.orEmpty()
+
+    private fun TrackInfo.sameSongAs(other: TrackInfo): Boolean =
+        identityKey().isNotEmpty() && identityKey() == other.identityKey()
 
     private fun requestAnimatedArtworkIfNeeded(track: TrackInfo) {
         if (!_motionArtworkEnabled.value) return
@@ -650,5 +763,6 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         // raise if the play/pause icon flickers back right after a local toggle
         const val VIDEO_ACTION_SYNC_HOLD_MS = 700L
         const val SERVER_RESTART_DEBOUNCE_MS = 500L
+        const val QUEUE_ARTWORK_RADIUS = 2
     }
 }

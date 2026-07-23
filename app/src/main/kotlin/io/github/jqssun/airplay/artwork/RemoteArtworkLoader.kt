@@ -20,9 +20,13 @@ class RemoteArtworkLoader {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
     }
 
-    suspend fun load(url: String): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun load(
+        url: String,
+        targetEdgePx: Int = ArtworkDecoder.TARGET_EDGE_PX,
+    ): Bitmap? = withContext(Dispatchers.IO) {
         if (!isTrustedArtworkUrl(url)) return@withContext null
-        memoryCache.get(url)?.let { return@withContext it }
+        val cacheKey = "$targetEdgePx\u0000$url"
+        memoryCache.get(cacheKey)?.let { return@withContext it }
         runCatching {
             val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -38,7 +42,7 @@ class RemoteArtworkLoader {
                 if (length > MAX_ARTWORK_BYTES) return@runCatching null
                 val bytes = connection.inputStream.use(::readBoundedArtwork)
                     ?: return@runCatching null
-                ArtworkDecoder.decode(bytes)?.also { memoryCache.put(url, it) }
+                ArtworkDecoder.decode(bytes, targetEdgePx)?.also { memoryCache.put(cacheKey, it) }
             } finally {
                 connection.disconnect()
             }
@@ -72,6 +76,6 @@ class RemoteArtworkLoader {
         const val MAX_ARTWORK_BYTES = 6 * 1024 * 1024
         const val CACHE_BYTES = 6 * 1024 * 1024
         const val USER_AGENT =
-            "AirplaySpeaker/0.14.8 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
     }
 }

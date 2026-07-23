@@ -72,7 +72,7 @@ class LyricsOvhClient {
     private companion object {
         const val BASE_URL = "https://api.lyrics.ovh"
         const val USER_AGENT =
-            "AirplaySpeaker/0.14.8 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
         const val MAX_RESPONSE_BYTES = 256 * 1_024
         val whitespace = Regex("\\s+")
         val versionSuffix = Regex(
