@@ -171,6 +171,10 @@
     <string name="setting_enforce_sdr_desc">Tag video as limited SDR; disable to allow HDR sources to pass through</string>
     <string name="setting_alac">ALAC audio</string>
     <string name="setting_alac_desc">ALAC codec for AirPlay music streaming</string>
+    <string name="setting_lossless_output">Lossless PCM output</string>
+    <string name="setting_lossless_output_desc">Keep decoded ALAC at unity gain without app-side volume scaling. Use the TV or receiver for volume.</string>
+    <string name="setting_spatial_enhancement">Spatial / Surround Enhancement</string>
+    <string name="setting_spatial_enhancement_desc">Widen stereo sound with lightweight in-app processing. This is not Dolby Atmos.</string>
     <string name="setting_sw_alac">Software ALAC decoder</string>
     <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
     <string name="setting_aac">AAC audio</string>

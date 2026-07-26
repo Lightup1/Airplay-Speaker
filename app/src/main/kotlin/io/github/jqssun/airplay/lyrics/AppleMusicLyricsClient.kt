@@ -97,7 +97,7 @@ class AppleMusicLyricsClient {
         private const val ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
         private const val LYRICS_URL = "https://lyrics.paxsenix.org/apple-music/lyrics"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/1.0.0 (https://github.com/jqssun/android-airplay-server)"
         private const val MAX_SEARCH_BYTES = 1024 * 1024
         private const val MAX_LYRICS_BYTES = 768 * 1024
         private const val CACHE_ENTRIES = 12
@@ -155,7 +155,7 @@ class AppleMusicLyricsClient {
         internal fun parseResponse(value: String, trackId: Long): LyricsState? {
             val root = runCatching { JSONObject(value) }.getOrNull() ?: return null
             val rawLines = root.optJSONArray("lyrics") ?: return null
-            val lines = buildList {
+            val parsedLines = buildList {
                 for (index in 0 until minOf(rawLines.length(), MAX_LINES)) {
                     val rawLine = rawLines.optJSONObject(index) ?: continue
                     val timeMs = rawLine.optLong("timestamp", rawLine.optLong("time", -1L))
@@ -178,22 +178,27 @@ class AppleMusicLyricsClient {
                     val wordEnd = words.maxOfOrNull { it.endMs } ?: timeMs
                     val endMs = maxOf(declaredEnd, wordEnd).takeIf { it > timeMs }
                     add(
-                        LyricLine(
-                            timeMs = timeMs,
-                            text = combinedText,
-                            words = words,
-                            exactWordTiming = completeWordTiming,
-                            endMs = endMs,
-                            alignment = if (rawLine.optBoolean("oppositeTurn", false)) {
-                                LyricAlignment.TRAILING
-                            } else {
-                                LyricAlignment.LEADING
-                            },
+                        ParsedProviderLine(
+                            line = LyricLine(
+                                timeMs = timeMs,
+                                text = combinedText,
+                                words = words,
+                                exactWordTiming = completeWordTiming,
+                                endMs = endMs,
+                            ),
+                            vocalTurn = ProviderVocalTurn(
+                                explicitOpposite = rawLine.optBooleanOrNull("oppositeTurn"),
+                                agent = rawLine.optString("agent"),
+                            ),
                         )
                     )
                 }
-            }.sortedBy { it.timeMs }
-            if (lines.isEmpty()) return null
+            }.sortedBy { it.line.timeMs }
+            if (parsedLines.isEmpty()) return null
+            val alignments = resolveProviderDuetAlignments(parsedLines.map { it.vocalTurn })
+            val lines = parsedLines.mapIndexed { index, parsed ->
+                parsed.line.copy(alignment = alignments[index])
+            }
             return LyricsState(
                 status = LyricsStatus.SYNCED,
                 lines = lines,
@@ -208,6 +213,13 @@ class AppleMusicLyricsClient {
         }
 
         private data class ParsedWords(val text: String, val words: List<LyricWord>)
+        private data class ParsedProviderLine(
+            val line: LyricLine,
+            val vocalTurn: ProviderVocalTurn,
+        )
+
+        private fun JSONObject.optBooleanOrNull(key: String): Boolean? =
+            if (has(key) && !isNull(key)) optBoolean(key, false) else null
 
         private fun parseWords(values: JSONArray?): ParsedWords {
             if (values == null) return ParsedWords("", emptyList())

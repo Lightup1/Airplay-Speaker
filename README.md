@@ -14,7 +14,7 @@
   <img alt="Android TV 7.0+" src="https://img.shields.io/badge/Android%20TV-7.0%2B-3DDC84?logo=android&logoColor=white">
   <img alt="CD-quality audio" src="https://img.shields.io/badge/Audio-16--bit%20%2F%2044.1%20kHz-8B5CF6">
   <img alt="Kotlin and Compose" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white">
-  <img alt="Version 0.14.13" src="https://img.shields.io/badge/Version-0.14.13-ff765d">
+  <img alt="Version 1.0.0" src="https://img.shields.io/badge/Version-1.0.0-ff765d">
   <img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue">
 </p>
 
@@ -22,16 +22,15 @@ Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. I
 
 **[Open the interactive website](https://l3kza08.github.io/airplay-speaker-web/)** · **[Download the latest APK](https://github.com/l3kza08/Sonic-Cast/releases/latest)**
 
-## What’s new in v0.14.13
+## What’s new in v1.0.0
 
-- **One-page lyrics transition** — hiding lyrics now moves the current artwork and metadata smoothly into the center instead of switching to a separate-looking screen.
-- **Browsable Up Next carousel** — previous, current, and upcoming tracks use equally sized artwork; use Left or Right to browse a sender-provided queue and OK to start the selected track.
-- **Cleaner lyrics control** — the small round lyrics button sits at the lower-right and hides after five seconds without remote input.
-- **Context only when lyrics are hidden** — the `NOW PLAYING` label and selected white outline appear only in the artwork carousel view.
-- **Smoother visual motion** — album-color background fields and motion artwork have been tuned for more fluid playback on Android TV devices with 2 GB of RAM.
-- **More reliable queue parsing** — repeated DACP queue records are preserved, preventing missing or duplicated items when compatible senders expose their play queue.
+- **Stable duet detection** — lyrics use two-sided placement only after two vocalist roles are confirmed across the song.
+- **All-right bug fixed** — malformed single-singer metadata can no longer push every lyric line to the right edge.
+- **Safer cross-provider matching** — vocalist turns transfer only between closely matching text and timestamps, without replacing the best word timing.
+- **Word-sync resilience** — incomplete timing is repaired per line, so one malformed verse does not disable karaoke highlighting for the rest of the song.
+- **TV-ready lyric presentation** — duet placement, compact backing vocals, remote lyric browsing, pause accuracy, and smooth transitions work together consistently.
 
-> Queue browsing depends on the AirPlay sender exposing its DACP play queue. When it is unavailable, the current track remains centered without inventing unavailable tracks.
+> AirPlay music arrives as lossless 16-bit / 44.1 kHz ALAC. Some Android TV audio systems always run their hardware mixer at 48 kHz; the app now reports that device-side conversion, but Android does not offer a universal public API to bypass it on every television.
 
 ## Demo
 
@@ -55,6 +54,7 @@ Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. I
 - **CD-quality audio** — receives ALAC and decodes it to 16-bit / 44.1 kHz stereo PCM.
 - **Background playback** — keeps playing after Home is pressed, with a Media Session and media notification.
 - **DACP controls** — supports play, pause, previous, next, and sender-controlled volume.
+- **Spatial / Surround Enhancement** — optionally widens stereo sound inside the app; it is clearly identified as an enhancement rather than Dolby Atmos.
 - **Optional video mode** — AirPlay Display advertising for mirroring and HLS can be enabled in Settings.
 
 ### Television-first design
@@ -97,7 +97,7 @@ Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. I
 
 ```bash
 adb connect <ANDROID_TV_IP>:5555
-adb install -r Airplay-Speaker-v0.14.13.apk
+adb install -r Airplay-Speaker-v1.0.0.apk
 ```
 
 The application appears in the Android TV app launcher as **Airplay Speaker**.
@@ -162,7 +162,7 @@ Native receiver components and retained source live under `app/src/main/cpp/` an
 - Motion artwork and synchronized lyrics depend on external data availability for each track.
 - Public Apple Music page structures and third-party lyrics APIs may change.
 - Compatibility and latency vary by sender, Android TV hardware, and network quality.
-- Dolby Atmos decoding and bitstream output are not supported; AirPlay music uses stereo PCM.
+- Dolby Atmos decoding and bitstream output are not supported; the optional spatial setting widens AirPlay's stereo PCM without claiming Atmos metadata.
 
 ## Open-source credits
 

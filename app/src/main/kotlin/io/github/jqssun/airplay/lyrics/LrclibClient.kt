@@ -5,9 +5,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.text.BreakIterator
 import java.util.Locale
-import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -234,7 +232,7 @@ class LrclibClient {
     companion object {
         private const val BASE_URL = "https://lrclib.net"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/1.0.0 (https://github.com/jqssun/android-airplay-server)"
 
         private const val MAX_LYRIC_LINES = 750
         private const val MAX_WORDS_PER_LINE = 120
@@ -243,7 +241,6 @@ class LrclibClient {
         private val wordTimeTag = Regex("<(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?>")
         private val offsetTag = Regex("\\[offset:([+-]?\\d+)]", RegexOption.IGNORE_CASE)
         private val whitespace = Regex("\\s+")
-        private val tokenWithTrailingWhitespace = Regex("\\S+\\s*")
         private val versionNoise = Regex("\\([^)]*(?:feat|ft\\.|remaster)[^)]*\\)")
         private val nonAlphaNumeric = Regex("[^\\p{L}\\p{N}]+")
 
@@ -297,7 +294,7 @@ class LrclibClient {
                 }
                 .sortedBy { it.timeMs }
             return sorted.mapIndexed { index, line ->
-                val tokens = tokenize(line.text)
+                val tokens = tokenizeLyricText(line.text)
                 val naturalEnd = line.timeMs + (tokens.size.coerceAtLeast(1) * 480L)
                     .coerceIn(1_200L, 8_000L)
                 val nextLineStart = sorted.getOrNull(index + 1)?.timeMs
@@ -318,7 +315,7 @@ class LrclibClient {
                         )
                     }
                 } else {
-                    distributeWords(tokens, line.timeMs, lineEnd)
+                    estimateLyricWords(line.text, line.timeMs, lineEnd)
                 }
                 LyricLine(
                     timeMs = line.timeMs,
@@ -339,13 +336,13 @@ class LrclibClient {
                 val startMs = parseTime(tag, offsetMs) ?: return@forEachIndexed
                 val segmentEnd = tags.getOrNull(index + 1)?.range?.first ?: content.length
                 val segment = content.substring(tag.range.last + 1, segmentEnd)
-                val tokens = tokenize(segment)
+                val tokens = tokenizeLyricText(segment)
                 if (tokens.isEmpty()) return@forEachIndexed
 
                 val nextTagMs = tags.getOrNull(index + 1)?.let { parseTime(it, offsetMs) }
                 val segmentEndMs = nextTagMs
                     ?: (startMs + tokens.size.coerceAtLeast(1) * 420L)
-                distributeWords(tokens, startMs, segmentEndMs).forEach { word ->
+                estimateLyricWords(segment, startMs, segmentEndMs).forEach { word ->
                     if (result.size >= MAX_WORDS_PER_LINE) return@forEach
                     result += WordSeed(word.text, word.startMs)
                 }
@@ -365,64 +362,6 @@ class LrclibClient {
             }
             return ((minutes * 60 + seconds) * 1000 + fractionMs + offsetMs)
                 .coerceAtLeast(0L)
-        }
-
-        private fun tokenize(text: String): List<String> {
-            if (text.isBlank()) return emptyList()
-            if (text.any(Char::isWhitespace)) {
-                return tokenWithTrailingWhitespace.findAll(text)
-                    .map { it.value }
-                    .take(MAX_WORDS_PER_LINE)
-                    .toList()
-            }
-
-            // java.text.BreakIterator is backed by ICU on Android and gives a
-            // much better approximation for Thai, CJK and other unspaced text.
-            val iterator = BreakIterator.getWordInstance(Locale.getDefault())
-            iterator.setText(text)
-            val tokens = mutableListOf<String>()
-            var start = iterator.first()
-            var end = iterator.next()
-            while (end != BreakIterator.DONE) {
-                val part = text.substring(start, end)
-                if (part.any { it.isLetterOrDigit() }) {
-                    tokens += part
-                } else if (tokens.isNotEmpty()) {
-                    tokens[tokens.lastIndex] += part
-                } else if (part.isNotEmpty()) {
-                    tokens += part
-                }
-                if (tokens.size >= MAX_WORDS_PER_LINE) break
-                start = end
-                end = iterator.next()
-            }
-            return tokens.ifEmpty { listOf(text) }
-        }
-
-        private fun distributeWords(
-            tokens: List<String>,
-            startMs: Long,
-            requestedEndMs: Long,
-        ): List<LyricWord> {
-            if (tokens.isEmpty()) return emptyList()
-            val endMs = requestedEndMs.coerceAtLeast(startMs + tokens.size * 80L)
-            val weights = tokens.map { token ->
-                val characterCount = token.codePointCount(0, token.length).coerceAtLeast(1)
-                sqrt(characterCount.toDouble()) + if (token.any { it in ",.;:!?…" }) 0.35 else 0.0
-            }
-            val totalWeight = weights.sum().coerceAtLeast(1.0)
-            val duration = endMs - startMs
-            var cumulative = 0.0
-            return tokens.mapIndexed { index, token ->
-                val wordStart = startMs + (duration * (cumulative / totalWeight)).toLong()
-                cumulative += weights[index]
-                val wordEnd = if (index == tokens.lastIndex) {
-                    endMs
-                } else {
-                    startMs + (duration * (cumulative / totalWeight)).toLong()
-                }
-                LyricWord(token, wordStart, wordEnd.coerceAtLeast(wordStart + 1L))
-            }
         }
 
         private fun ensureLatinSpacing(words: List<WordSeed>): List<WordSeed> =

@@ -153,7 +153,7 @@ class AppleMusicArtworkClient {
         private const val ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
         private const val APPLE_MUSIC_ALBUM_URL = "https://music.apple.com/th/album"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/1.0.0 (https://github.com/jqssun/android-airplay-server)"
 
         private val motionDictionaryPattern = Regex(
             """motionDetailSquare.{0,16000}?\"video\"\s*:\s*\{.{0,6000}?\"url\"\s*:\s*\"([^\"]+?\.m3u8[^\"]*)\"""",

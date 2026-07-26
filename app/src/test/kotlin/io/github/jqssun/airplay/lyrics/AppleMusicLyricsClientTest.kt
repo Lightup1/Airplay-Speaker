@@ -74,4 +74,51 @@ class AppleMusicLyricsClientTest {
 
         assertEquals(2L, id)
     }
+
+    @Test
+    fun aSingleAgentLabelDoesNotPushTheWholeSongToTheRight() {
+        val response = """
+            {
+              "lyrics": [
+                {
+                  "timestamp": 1000,
+                  "endtime": 2000,
+                  "agent": "v2",
+                  "text": [
+                    {"text":"Second singer", "timestamp":1000, "endtime":2000}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 1L)
+
+        assertEquals(LyricAlignment.LEADING, state?.lines?.single()?.alignment)
+    }
+
+    @Test
+    fun distinctAgentsRestoreDuetSidesWhenBooleanFlagIsMissing() {
+        val response = """
+            {
+              "lyrics": [
+                {
+                  "timestamp": 1000,
+                  "agent": "v2",
+                  "text": [{"text":"First singer", "timestamp":1000, "endtime":2000}]
+                },
+                {
+                  "timestamp": 3000,
+                  "agent": "v1",
+                  "text": [{"text":"Second singer", "timestamp":3000, "endtime":4000}]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 1L)
+
+        assertEquals(LyricAlignment.LEADING, state?.lines?.first()?.alignment)
+        assertEquals(LyricAlignment.TRAILING, state?.lines?.last()?.alignment)
+    }
 }

@@ -87,7 +87,7 @@ class NeteaseLyricsClient {
     companion object {
         private const val BASE_URL = "https://music.163.com"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/1.0.0 (https://github.com/jqssun/android-airplay-server)"
         private const val MAX_RESPONSE_BYTES = 512 * 1_024
         private const val MAX_LINES = 750
         private const val MAX_WORDS_PER_LINE = 120

@@ -68,13 +68,24 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private var service: AirPlayService? = null
     val dacpPlayer: Player? get() = service?.dacpPlayer
 
-    fun audioVolumeUp() { service?.dacpController?.volumeUp() }
-    fun audioVolumeDown() { service?.dacpController?.volumeDown() }
+    fun audioVolumeUp() {
+        setAppVolume((_appVolume.value + APP_VOLUME_STEP).coerceAtMost(100))
+    }
+    fun audioVolumeDown() {
+        setAppVolume((_appVolume.value - APP_VOLUME_STEP).coerceAtLeast(0))
+    }
     fun audioScanBegin(forward: Boolean) {
         service?.dacpController?.let { if (forward) it.beginFastForward() else it.beginRewind() }
     }
     fun audioScanEnd() { service?.dacpController?.playResume() }
-    fun audioMuteToggle() { service?.dacpController?.muteToggle() }
+    fun audioMuteToggle() {
+        if (_appVolume.value == 0) {
+            setAppVolume(lastAudibleAppVolume.coerceAtLeast(APP_VOLUME_STEP))
+        } else {
+            lastAudibleAppVolume = _appVolume.value
+            setAppVolume(0)
+        }
+    }
     fun playPreviousQueueTrack() { service?.dacpController?.prevItem() }
     fun playQueuedTrack(relativeIndex: Int) {
         if (relativeIndex > 0) service?.dacpController?.playQueueItem(relativeIndex)
@@ -149,6 +160,16 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _aacEnabled = MutableStateFlow(prefs.getBoolean(Prefs.AAC_ENABLED, Prefs.DEF_AAC_ENABLED))
     val aacEnabled: StateFlow<Boolean> = _aacEnabled.asStateFlow()
 
+    private val _losslessOutput = MutableStateFlow(
+        prefs.getBoolean(Prefs.LOSSLESS_OUTPUT, Prefs.DEF_LOSSLESS_OUTPUT)
+    )
+    val losslessOutput: StateFlow<Boolean> = _losslessOutput.asStateFlow()
+
+    private val _spatialEnhancement = MutableStateFlow(
+        prefs.getBoolean(Prefs.SPATIAL_ENHANCEMENT, Prefs.DEF_SPATIAL_ENHANCEMENT)
+    )
+    val spatialEnhancement: StateFlow<Boolean> = _spatialEnhancement.asStateFlow()
+
     private val _resolution = MutableStateFlow(prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!)
     val resolution: StateFlow<String> = _resolution.asStateFlow()
 
@@ -179,6 +200,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.getBoolean(Prefs.LYRICS_VISIBLE, Prefs.DEF_LYRICS_VISIBLE)
     )
     val lyricsVisible: StateFlow<Boolean> = _lyricsVisible.asStateFlow()
+
+    private val initialAppVolume = prefs.getInt(Prefs.APP_VOLUME, Prefs.DEF_APP_VOLUME)
+        .coerceIn(0, 100)
+    private val _appVolume = MutableStateFlow(initialAppVolume)
+    val appVolume: StateFlow<Int> = _appVolume.asStateFlow()
+    private val _appVolumeActivity = MutableStateFlow(0L)
+    val appVolumeActivity: StateFlow<Long> = _appVolumeActivity.asStateFlow()
+    private var lastAudibleAppVolume = initialAppVolume.takeIf { it > 0 } ?: Prefs.DEF_APP_VOLUME
 
     private val _autoFullscreen = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_FULLSCREEN, Prefs.DEF_AUTO_FULLSCREEN))
     val autoFullscreen: StateFlow<Boolean> = _autoFullscreen.asStateFlow()
@@ -281,6 +310,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     val nextTrack: StateFlow<TrackInfo?> = _nextTrack.asStateFlow()
     private val _upNextTracks = MutableStateFlow<List<TrackInfo>>(emptyList())
     val upNextTracks: StateFlow<List<TrackInfo>> = _upNextTracks.asStateFlow()
+    private val _queueName = MutableStateFlow("")
+    val queueName: StateFlow<String> = _queueName.asStateFlow()
     private var localPreviousTrack: TrackInfo? = null
     private var queueArtworkKey = ""
     private var queueArtworkJob: Job? = null
@@ -290,6 +321,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _audioPositionMs = MutableStateFlow(0L)
     val audioPositionMs: StateFlow<Long> = _audioPositionMs.asStateFlow()
+
+    private val _audioOutputStatus = MutableStateFlow("")
+    val audioOutputStatus: StateFlow<String> = _audioOutputStatus.asStateFlow()
 
     private val _audioPlaying = MutableStateFlow(false)
     val audioPlaying: StateFlow<Boolean> = _audioPlaying.asStateFlow()
@@ -418,6 +452,12 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setSwAlacEnabled(v: Boolean) { _swAlacEnabled.value = v; prefs.edit().putBoolean(Prefs.SW_ALAC_ENABLED, v).apply(); _applyByServerRestart() }
     fun setAlacEnabled(v: Boolean) { _alacEnabled.value = v; prefs.edit().putBoolean(Prefs.ALAC_ENABLED, v).apply(); _applyByServerRestart() }
     fun setAacEnabled(v: Boolean) { _aacEnabled.value = v; prefs.edit().putBoolean(Prefs.AAC_ENABLED, v).apply(); _applyByServerRestart() }
+    fun setLosslessOutput(v: Boolean) { _losslessOutput.value = v; prefs.edit().putBoolean(Prefs.LOSSLESS_OUTPUT, v).apply(); _applyByServerRestart() }
+    fun setSpatialEnhancement(v: Boolean) {
+        _spatialEnhancement.value = v
+        prefs.edit().putBoolean(Prefs.SPATIAL_ENHANCEMENT, v).apply()
+        service?.setSpatialEnhancementEnabled(v)
+    }
     fun setResolution(v: String) { _resolution.value = v; prefs.edit().putString(Prefs.RESOLUTION, v).apply(); _applyByServerRestart() }
     fun setMaxFps(v: Int) { _maxFps.value = v; prefs.edit().putInt(Prefs.MAX_FPS, v).apply(); _applyByServerRestart() }
     fun setOverscanned(v: Boolean) { _overscanned.value = v; prefs.edit().putBoolean(Prefs.OVERSCANNED, v).apply(); _applyByServerRestart() }
@@ -442,6 +482,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         _lyricsVisible.value = v
         prefs.edit().putBoolean(Prefs.LYRICS_VISIBLE, v).apply()
     }
+    private fun setAppVolume(percent: Int) {
+        val value = percent.coerceIn(0, 100)
+        if (value > 0) lastAudibleAppVolume = value
+        _appVolume.value = value
+        _appVolumeActivity.value++
+        prefs.edit().putInt(Prefs.APP_VOLUME, value).apply()
+        service?.setAppVolume(value)
+    }
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
     fun setAdvertiseVideo(v: Boolean) { _advertiseVideo.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_VIDEO, v).apply(); _applyByServerRestart() }
@@ -462,6 +510,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // service binding
     fun bindService(svc: AirPlayService) {
         service = svc
+        svc.setAppVolume(_appVolume.value)
+        svc.setSpatialEnhancementEnabled(_spatialEnhancement.value)
         updateFromService()
     }
 
@@ -643,7 +693,16 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             updateQueueTracks(it.dacpController?.queue?.value ?: DacpQueueState(), nextTrack)
             _lyrics.value = it.lyrics.value
             _audioPositionMs.value = if (it.audioOnly.value) it.currentPositionMs() else 0L
+            _audioOutputStatus.value = listOf(
+                it.audioRenderer.codecLabel,
+                it.audioRenderer.outputPathLabel,
+            ).filter { label -> label.isNotBlank() }.joinToString(" · ")
             _audioPlaying.value = it.audioOnly.value && it.playing.value
+            val serviceAppVolume = it.appVolumePercent()
+            if (_appVolume.value != serviceAppVolume) {
+                _appVolume.value = serviceAppVolume
+                if (serviceAppVolume > 0) lastAudibleAppVolume = serviceAppVolume
+            }
             if (_debugEnabled.value) {
                 _debugInfo.value = it.collectDebugInfo()
             }
@@ -651,6 +710,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     }
 
     private fun updateQueueTracks(queue: DacpQueueState, current: TrackInfo) {
+        _queueName.value = queue.name
         val previous = queue.previous?.takeUnless { it.sameSongAs(current) } ?: localPreviousTrack
         val existingArtwork = _upNextTracks.value.associateBy { it.identityKey() }
         val rawUpcoming = if (queue.upNext.firstOrNull()?.sameSongAs(current) == true) {
@@ -756,6 +816,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     }
 
     private companion object {
+        const val APP_VOLUME_STEP = 5
         // post-commit: show the target until within epsilon, give up after the timeout
         const val SCRUB_SETTLE_POLL_MS = 100L
         const val SCRUB_SETTLE_EPSILON_MS = 2_000L

@@ -75,4 +75,46 @@ class LyricsPlusClientTest {
         assertTrue(state?.lines?.last()?.words?.isEmpty() == true)
         assertTrue(state?.plainLyrics?.contains("Line with no word timing") == true)
     }
+
+    @Test
+    fun aSingleAgentLabelDoesNotPushTheWholeSongToTheRight() {
+        val response = """
+            {
+              "type": "Word",
+              "lyrics": [
+                {
+                  "time": 1000,
+                  "duration": 1000,
+                  "text": "Right side",
+                  "agent": "v2",
+                  "syllables": [
+                    {"time":1000,"duration":1000,"text":"Right side"}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val state = LyricsPlusClient.parseResponse(response)
+
+        assertEquals(LyricAlignment.LEADING, state?.lines?.single()?.alignment)
+    }
+
+    @Test
+    fun retainsDuetTurnsWhenTwoAgentsArePresent() {
+        val response = """
+            {
+              "type": "Line",
+              "lyrics": [
+                {"time":1000,"duration":1000,"text":"First singer","agent":"v1"},
+                {"time":3000,"duration":1000,"text":"Second singer","agent":"v2"}
+              ]
+            }
+        """.trimIndent()
+
+        val state = LyricsPlusClient.parseResponse(response)
+
+        assertEquals(LyricAlignment.LEADING, state?.lines?.first()?.alignment)
+        assertEquals(LyricAlignment.TRAILING, state?.lines?.last()?.alignment)
+    }
 }

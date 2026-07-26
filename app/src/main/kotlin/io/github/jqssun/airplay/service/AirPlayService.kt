@@ -50,6 +50,10 @@ import io.github.jqssun.airplay.lyrics.LyricsRequest
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
 import io.github.jqssun.airplay.lyrics.NeteaseLyricsClient
+import io.github.jqssun.airplay.lyrics.withDuetAlignmentFrom
+import io.github.jqssun.airplay.lyrics.withRepairedWordTimings
+import io.github.jqssun.airplay.lyrics.withStableDuetAlignment
+import io.github.jqssun.airplay.lyrics.wordTimingQualityScore
 import io.github.jqssun.airplay.renderer.AirPlayVideoPlayer
 import io.github.jqssun.airplay.renderer.AudioRenderer
 import io.github.jqssun.airplay.renderer.VideoRenderer
@@ -60,7 +64,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -213,6 +219,17 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
 
     override fun onCreate() {
         super.onCreate()
+        val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+        audioRenderer.setAppVolume(
+            prefs.getInt(Prefs.APP_VOLUME, Prefs.DEF_APP_VOLUME)
+                .coerceIn(0, 100) / 100f
+        )
+        audioRenderer.setSpatialEnhancementEnabled(
+            prefs.getBoolean(
+                Prefs.SPATIAL_ENHANCEMENT,
+                Prefs.DEF_SPATIAL_ENHANCEMENT,
+            )
+        )
         createNotificationChannel()
         dacpController = DacpController(this)
         dacpPlayer = DacpPlayer(
@@ -371,6 +388,10 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 Prefs.AUDIO_BUFFER_MULTIPLIER,
                 Prefs.DEF_AUDIO_BUFFER_MULTIPLIER,
             )
+            audioRenderer.losslessOutput = prefs.getBoolean(
+                Prefs.LOSSLESS_OUTPUT,
+                Prefs.DEF_LOSSLESS_OUTPUT,
+            )
             val pemKey = resources.openRawResource(R.raw.airport_key)
                 .bufferedReader()
                 .use { it.readText() }
@@ -430,6 +451,13 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
 
         audioRenderer.swAlacEnabled = prefs.getBoolean(Prefs.SW_ALAC_ENABLED, Prefs.DEF_SW_ALAC_ENABLED)
         audioRenderer.audioBufferMultiplier = prefs.getInt(Prefs.AUDIO_BUFFER_MULTIPLIER, Prefs.DEF_AUDIO_BUFFER_MULTIPLIER)
+        audioRenderer.losslessOutput = prefs.getBoolean(Prefs.LOSSLESS_OUTPUT, Prefs.DEF_LOSSLESS_OUTPUT)
+        audioRenderer.setSpatialEnhancementEnabled(
+            prefs.getBoolean(
+                Prefs.SPATIAL_ENHANCEMENT,
+                Prefs.DEF_SPATIAL_ENHANCEMENT,
+            )
+        )
         videoRenderer.enforceSdr = prefs.getBoolean(Prefs.ENFORCE_SDR, Prefs.DEF_ENFORCE_SDR)
         videoRenderer.keyAllowFrameDrop = prefs.getBoolean(Prefs.KEY_ALLOW_FRAME_DROP, Prefs.DEF_KEY_ALLOW_FRAME_DROP)
         val realtimePriority = prefs.getBoolean(Prefs.KEY_PRIORITY, Prefs.DEF_KEY_PRIORITY)
@@ -561,10 +589,10 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         videoRenderer.release()
         audioRenderer.release()
         airPlayVideoPlayer.stop()
-        mediaSession?.isActive = false
         _audioOnly.value = false
         _videoPlaybackActive.value = false
         _mirroringActive.value = false
+        refreshMediaSessionActivity()
         _videoPlaybackInfo.value = VideoPlaybackInfo()
         _lastVideoPollAt = 0
         _videoPollSuppressed = false
@@ -635,7 +663,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         _videoPollSuppressed = true
         _videoPlaybackActive.value = false
         airPlayVideoPlayer.stop()
-        if (!_audioOnly.value) mediaSession?.isActive = false
+        refreshMediaSessionActivity()
         log(message)
     }
 
@@ -739,7 +767,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         _videoPlaybackActive.value = true
         airPlayVideoPlayer.play(location, startPositionSeconds)
         // claim media-button routing for keys that arrive as media-session events
-        mediaSession?.isActive = true
+        refreshMediaSessionActivity()
         log("AirPlay Video play: $location @ ${startPositionSeconds}s")
     }
 
@@ -778,6 +806,29 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         audioRenderer.setVolume(volume)
     }
 
+    fun setAppVolume(percent: Int) {
+        val value = percent.coerceIn(0, 100)
+        audioRenderer.setAppVolume(value / 100f)
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(Prefs.APP_VOLUME, value)
+            .apply()
+    }
+
+    fun appVolumePercent(): Int = (audioRenderer.appVolume * 100f).toInt().coerceIn(0, 100)
+
+    fun setSpatialEnhancementEnabled(enabled: Boolean) {
+        audioRenderer.setSpatialEnhancementEnabled(enabled)
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Prefs.SPATIAL_ENHANCEMENT, enabled)
+            .apply()
+    }
+
+    private fun refreshMediaSessionActivity() {
+        mediaSession?.isActive = _audioOnly.value || _videoPlaybackActive.value
+    }
+
     override fun onConnectionInit() {
         val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
@@ -805,7 +856,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
             _positionMs.value = 0
             _durationMs.value = 0
             _lastAudioPacketAtMs = 0L
-            mediaSession?.isActive = false
+            refreshMediaSessionActivity()
             audioRenderer.markSessionEnded()
             _refreshDacpPlayer()
         }
@@ -900,13 +951,12 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
     override fun onAudioOnly(audioOnly: Boolean) {
         val prev = _audioOnly.value
         _audioOnly.value = audioOnly
+        refreshMediaSessionActivity()
         _refreshDacpPlayer()
         if (audioOnly && !prev) {
-            mediaSession?.isActive = true
             modeCallback?.invoke(true)
             log("Audio mode")
         } else if (!audioOnly && prev) {
-            mediaSession?.isActive = false
             _coverArtBytes = null
             _trackInfo.value = TrackInfo()
             _resetLyrics()
@@ -959,31 +1009,59 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 album = info.album,
                 durationMs = duration,
             )
-            var source = "Apple Music"
-            var result = duetLyricsClient.find(request)
-            if (result?.hasDisplayableLyrics() != true) {
-                source = "NetEase"
-                result = synchronizedLyricsClient.find(request)
+            val candidates = mutableListOf<Pair<String, LyricsState>>()
+
+            // Query the strongest timed sources together. Picking by timing
+            // completeness avoids a partially parsed first result masking a
+            // later provider with true word-by-word data.
+            coroutineScope {
+                val apple = async { duetLyricsClient.find(request) }
+                val netease = async { synchronizedLyricsClient.find(request) }
+                apple.await()?.let { candidates += "Apple Music" to it }
+                netease.await()?.let { candidates += "NetEase" to it }
             }
-            if (result?.hasDisplayableLyrics() != true) {
-                source = "LyricsPlus"
-                result = preciseLyricsClient.findPrecise(request)
+
+            var selected = candidates.bestDisplayableLyrics()
+            if ((selected?.second?.wordTimingQualityScore() ?: 0) < HIGH_QUALITY_WORD_SYNC_SCORE) {
+                coroutineScope {
+                    val lyricsPlus = async { preciseLyricsClient.findPrecise(request) }
+                    val lrclib = async { lyricsFallbackClient.find(request) }
+                    lyricsPlus.await()?.let { candidates += "LyricsPlus" to it }
+                    candidates += "LRCLIB" to lrclib.await()
+                }
+                selected = candidates.bestDisplayableLyrics()
             }
-            if (result?.hasDisplayableLyrics() != true) {
-                source = "Lyrics.ovh"
-                result = plainLyricsClient.find(request)
+
+            // Plain text is deliberately last: a timed result from LRCLIB is
+            // preferable even when its individual word windows are estimated.
+            if (selected == null) {
+                plainLyricsClient.find(request)
+                    ?.takeIf { it.hasDisplayableLyrics() }
+                    ?.let { selected = "Lyrics.ovh" to it }
             }
-            if (result?.hasDisplayableLyrics() != true) {
-                source = "LRCLIB"
-                result = lyricsFallbackClient.find(request)
-            }
-            val finalResult = result ?: LyricsState(LyricsStatus.NOT_FOUND)
-            log("Lyrics: $source ${finalResult.status} (${finalResult.lines.size} timed lines)")
+
+            val source = selected?.first ?: "none"
+            val duetReference = candidates
+                .firstOrNull { (candidateSource, _) -> candidateSource == "Apple Music" }
+                ?.second
+            val finalResult = (selected?.second ?: LyricsState(LyricsStatus.NOT_FOUND))
+                .withDuetAlignmentFrom(duetReference)
+                .withRepairedWordTimings(duration)
+                .withStableDuetAlignment()
+            log(
+                "Lyrics: $source ${finalResult.status} " +
+                    "(${finalResult.lines.size} timed lines, score=${finalResult.wordTimingQualityScore()})"
+            )
             synchronized(this@AirPlayService) {
                 if (lyricsKey == key) _lyrics.value = finalResult
             }
         }
     }
+
+    private fun List<Pair<String, LyricsState>>.bestDisplayableLyrics():
+        Pair<String, LyricsState>? = asSequence()
+        .filter { (_, lyrics) -> lyrics.hasDisplayableLyrics() }
+        .maxByOrNull { (_, lyrics) -> lyrics.wordTimingQualityScore() }
 
     private fun LyricsState.hasDisplayableLyrics(): Boolean = when (status) {
         LyricsStatus.SYNCED,
@@ -1094,8 +1172,11 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         videoFrames = videoRenderer.frameCount,
         droppedFrames = videoRenderer.droppedFrames,
         framePacingJitterUs = videoRenderer.framePacingJitterUs,
-        audioCodec = audioRenderer.codecLabel,
-        audioVolume = (audioRenderer.volume * 100).toInt(),
+        audioCodec = listOf(
+            audioRenderer.codecLabel,
+            audioRenderer.outputPathLabel,
+        ).filter { it.isNotBlank() }.joinToString(" · "),
+        audioVolume = (audioRenderer.appVolume * 100).toInt(),
         connections = _connectionCount.value,
     )
 
@@ -1245,5 +1326,6 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         private const val AUDIO_PAUSE_WATCHDOG_INTERVAL_MS = 250L
         private const val AUDIO_PAUSE_SILENCE_MS = 1_800L
         private const val MAX_RETAINED_COVER_BYTES = 2 * 1024 * 1024
+        private const val HIGH_QUALITY_WORD_SYNC_SCORE = 2_200
     }
 }

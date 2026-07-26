@@ -57,12 +57,12 @@ class LyricsPlusClient {
     companion object {
         private const val BASE_URL = "https://lyricsplus.prjktla.my.id"
         private const val USER_AGENT =
-            "AirplaySpeaker/0.14.13 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/1.0.0 (https://github.com/jqssun/android-airplay-server)"
 
         internal fun parseResponse(value: String): LyricsState? {
             val root = runCatching { JSONObject(value) }.getOrNull() ?: return null
             val rawLines = root.optJSONArray("lyrics") ?: return null
-            val lines = buildList {
+            val parsedLines = buildList {
                 for (lineIndex in 0 until rawLines.length()) {
                     val rawLine = rawLines.optJSONObject(lineIndex) ?: continue
                     val timeMs = rawLine.optLong("time", -1L)
@@ -98,18 +98,28 @@ class LyricsPlusClient {
                         lyricWordsMatchLine(text, it)
                     }.orEmpty()
                     add(
-                        LyricLine(
-                            timeMs = timeMs,
-                            text = text,
-                            words = completeWordTimeline,
-                            exactWordTiming = completeWordTimeline.isNotEmpty(),
-                            endMs = (timeMs + durationMs).takeIf { durationMs > 0L },
+                        ParsedProviderLine(
+                            line = LyricLine(
+                                timeMs = timeMs,
+                                text = text,
+                                words = completeWordTimeline,
+                                exactWordTiming = completeWordTimeline.isNotEmpty(),
+                                endMs = (timeMs + durationMs).takeIf { durationMs > 0L },
+                            ),
+                            vocalTurn = ProviderVocalTurn(
+                                explicitOpposite = rawLine.optBooleanOrNull("oppositeTurn"),
+                                agent = rawLine.optString("agent"),
+                            ),
                         )
                     )
                 }
-            }.sortedBy { it.timeMs }
+            }.sortedBy { it.line.timeMs }
 
-            if (lines.isEmpty()) return null
+            if (parsedLines.isEmpty()) return null
+            val alignments = resolveProviderDuetAlignments(parsedLines.map { it.vocalTurn })
+            val lines = parsedLines.mapIndexed { index, parsed ->
+                parsed.line.copy(alignment = alignments[index])
+            }
             return LyricsState(
                 status = LyricsStatus.SYNCED,
                 lines = lines,
@@ -121,5 +131,13 @@ class LyricsPlusClient {
                 },
             )
         }
+
+        private data class ParsedProviderLine(
+            val line: LyricLine,
+            val vocalTurn: ProviderVocalTurn,
+        )
+
+        private fun JSONObject.optBooleanOrNull(key: String): Boolean? =
+            if (has(key) && !isNull(key)) optBoolean(key, false) else null
     }
 }
