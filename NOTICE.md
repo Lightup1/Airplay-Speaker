@@ -1,6 +1,6 @@
 # Airplay Speaker — Open-source notice
 
-Airplay Speaker 0.14.8 is a modified distribution of **AirPlay Receiver for
+Airplay Speaker 2.0.0 is a modified distribution of **AirPlay Receiver for
 Android** by jqssun:
 
 - Project: https://github.com/jqssun/android-airplay-server
@@ -19,12 +19,9 @@ components. Their license files and source trees are retained in
 - libplist — GNU LGPL 2.1 or later
 - openssl-cmake / OpenSSL build integration — licenses retained in its source
 
-Synchronized lyrics are retrieved at runtime from the open-source LyricsPlus
-service (https://github.com/ibratabian17/lyricsplus) and the open LRCLIB service
-(https://lrclib.net). The application sends the current track title, artist,
-album, and duration solely to locate a matching lyrics record. LyricsPlus is
-queried first for precise syllable/word timing; LRCLIB is the automatic fallback.
-Lyrics are not bundled in this distribution.
+Lyrics are retrieved at runtime only from the Apple Music lyric source. The
+application sends the current track title, artist, album, and duration solely
+to identify the matching song. Lyrics are not bundled in this distribution.
 
 When track metadata is available, the application may query Apple's public
 iTunes Search service with the title and artist to identify the matching album,
@@ -36,10 +33,11 @@ artwork nor the normal cover is bundled in the application or persisted by
 Airplay Speaker. If no motion artwork is published or the request fails, the
 sender-provided static cover remains visible with a local animation.
 
-For the television word-following effect, LyricsPlus syllable timing and
-Enhanced LRC word timestamps are preserved exactly. If a record contains only
-ordinary LRCLIB line timestamps, word windows are estimated locally between
-adjacent lines. No user account or analytics identifier is sent.
+For the television word-following effect, Apple Music word or syllable timing
+is preserved. If Apple provides only line timing, the complete active line is
+highlighted; if it provides no timing, the lyrics are displayed as a normal
+text document. The application does not fabricate word timing. No user account
+or analytics identifier is sent.
 
 The prebuilt `libairplay_native.so`, `libcrypto.so`, and `libc++_shared.so`
 files in `app/src/main/jniLibs` were extracted from the official upstream

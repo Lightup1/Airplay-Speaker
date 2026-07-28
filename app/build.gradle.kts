@@ -31,8 +31,8 @@ android {
         applicationId = "com.soniccast.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 35
-        versionName = "0.14.13"
+        versionCode = 200
+        versionName = "2.0.0"
         ndk {
             abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }

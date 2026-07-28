@@ -36,6 +36,38 @@ class DmapParserTest {
         assertEquals("Second Album", items[1].album)
     }
 
+    @Test
+    fun readsPlaylistNameFromMainQueueSection() {
+        val mainSection = container(
+            "mlit",
+            string("ceQk", "main") +
+                string("ceQl", "Up Next") +
+                string("ceQh", "from Pop Punk Essentials"),
+        )
+        val response = container(
+            "ceQR",
+            container("mlcl", container("ceQS", mainSection)),
+        )
+
+        assertEquals("Pop Punk Essentials", DmapParser.parseQueueName(response))
+    }
+
+    @Test
+    fun ignoresGenericMusicQueueSource() {
+        val mainSection = container(
+            "mlit",
+            string("ceQk", "main") +
+                string("ceQl", "Up Next") +
+                string("ceQh", "from Music"),
+        )
+        val response = container(
+            "ceQR",
+            container("mlcl", container("ceQS", mainSection)),
+        )
+
+        assertEquals(null, DmapParser.parseQueueName(response))
+    }
+
     private fun string(tag: String, value: String): ByteArray = tagged(tag, value.toByteArray())
 
     private fun integer(tag: String, value: Int): ByteArray = tagged(

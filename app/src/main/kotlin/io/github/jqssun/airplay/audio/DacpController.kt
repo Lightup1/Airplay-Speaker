@@ -18,6 +18,7 @@ data class DacpQueueState(
     val previous: TrackInfo? = null,
     val upNext: List<TrackInfo> = emptyList(),
     val supported: Boolean = false,
+    val name: String = "",
 ) {
     val next: TrackInfo? get() = upNext.firstOrNull()
 }
@@ -79,6 +80,9 @@ class DacpController(ctx: Context) {
                 val nextItems = nextResponse.getOrNull()
                     ?.let(DmapParser::parseQueueItems)
                     .orEmpty()
+                val queueName = nextResponse.getOrNull()
+                    ?.let(DmapParser::parseQueueName)
+                    .orEmpty()
                 val upcoming = nextItems
                     .let { items ->
                         if (items.firstOrNull()?.sameSongAs(current) == true) items.drop(1) else items
@@ -88,6 +92,7 @@ class DacpController(ctx: Context) {
                     previous = previousItems.lastOrNull { !it.sameSongAs(current) },
                     upNext = upcoming,
                     supported = previousResponse.isSuccess || nextResponse.isSuccess,
+                    name = queueName,
                 )
             }
         } catch (_: Exception) {

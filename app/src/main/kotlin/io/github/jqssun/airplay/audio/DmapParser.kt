@@ -90,9 +90,70 @@ object DmapParser {
         return result
     }
 
+    /**
+     * Returns the sender-provided source of the main Up Next section.
+     *
+     * Apple DACP uses `ceQh` for labels such as "from Favourites". Generic
+     * sources ("from Music", "Up Next") are deliberately ignored so the UI
+     * can fall back to the current album instead of inventing a playlist.
+     */
+    fun parseQueueName(data: ByteArray): String? {
+        var result: String? = null
+
+        fun usefulName(raw: String?): String? {
+            val candidate = raw
+                ?.trim()
+                ?.replace(Regex("^from\\s+", RegexOption.IGNORE_CASE), "")
+                ?.trim()
+                ?.trim('"', '\'', '“', '”')
+                ?.takeIf { it.isNotBlank() }
+                ?: return null
+            return candidate.takeUnless {
+                it.lowercase() in GENERIC_QUEUE_NAMES
+            }
+        }
+
+        fun walk(payload: ByteArray) {
+            if (result != null) return
+            val buf = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
+            while (buf.remaining() >= 8 && result == null) {
+                val tagBytes = ByteArray(4)
+                buf.get(tagBytes)
+                val tag = String(tagBytes, Charsets.US_ASCII)
+                val len = buf.int
+                if (len < 0 || len > buf.remaining()) break
+                val value = ByteArray(len)
+                buf.get(value)
+
+                if (tag == "mlit") {
+                    val section = parse(value)
+                    if ((section["ceQk"] as? String).equals("main", ignoreCase = true)) {
+                        result = usefulName(section["ceQh"] as? String)
+                            ?: usefulName(section["ceQl"] as? String)
+                    }
+                } else if (tag in CONTAINER_TAGS) {
+                    walk(value)
+                }
+            }
+        }
+
+        walk(data)
+        return result
+    }
+
     private fun _readInt(b: ByteArray): Long {
         var v = 0L
         for (byte in b) v = (v shl 8) or (byte.toLong() and 0xFF)
         return v
     }
+
+    private val GENERIC_QUEUE_NAMES = setOf(
+        "music",
+        "apple music",
+        "library",
+        "queue",
+        "up next",
+        "now playing",
+        "previously played",
+    )
 }

@@ -2,13 +2,44 @@ package io.github.jqssun.airplay.renderer
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import io.github.jqssun.airplay.bridge.NativeBridge
 import java.nio.ByteBuffer
+import kotlin.math.max
 import kotlin.math.pow
+
+internal fun resolveTrackGain(
+    senderVolume: Float,
+    appVolume: Float,
+): Float = (senderVolume * appVolume).coerceIn(0f, 1f)
+
+/**
+ * Slew-limits AudioTrack queue measurements before they reach the lyric clock.
+ * Packet writes make the raw queue move in small steps; subtracting those
+ * steps directly can make a word highlight visibly jump backwards. A queue is
+ * allowed to grow by less than elapsed wall time, keeping the audible position
+ * monotonic during normal playback while still following a real buffer change.
+ */
+internal fun smoothAudioQueueEstimate(
+    previousMs: Long,
+    measuredMs: Long,
+    elapsedMs: Long,
+    initialized: Boolean,
+): Long {
+    val measured = measuredMs.coerceAtLeast(0L)
+    if (!initialized) return measured
+    val elapsed = elapsedMs.coerceAtLeast(1L)
+    val maxRise = (elapsed * 3L / 4L + 4L).coerceAtLeast(5L)
+    val maxFall = (elapsed * 2L + 8L).coerceAtLeast(10L)
+    val delta = measured - previousMs
+    return previousMs + delta.coerceIn(-maxFall, maxRise)
+}
 
 class AudioRenderer {
 
@@ -16,13 +47,28 @@ class AudioRenderer {
     private var track: AudioTrack? = null
     private var currentCt = -1
     private var currentPcmFormat: Triple<Int, Int, Int>? = null
+    private var outputChannels = 2
     private var failedCt = -1
     private var swAlacHandle = 0L  // software ALAC decoder handle
+    private val spatialEnhancer = StereoSpatialEnhancer()
+    private val vocalReducer = StereoVocalReducer()
+    private var outputSampleRate = 44100
+    @Volatile private var totalPcmBytesWritten = 0L
+    @Volatile private var cachedOutputQueueMs = 0L
+    @Volatile private var outputQueueSampleAtMs = 0L
+    @Volatile private var outputQueueEstimateInitialized = false
     @Volatile var swAlacEnabled = true
     @Volatile var audioBufferMultiplier = 4
     @Volatile var realtimeDecoderPriority = true
+    @Volatile var losslessOutput = true
+    @Volatile var spatialEnhancementEnabled = false; private set
+    @Volatile var karaokeEnabled = false; private set
+    @Volatile var karaokeVocalLevel = 35; private set
     @Volatile var volume = 1.0f; private set
+    @Volatile var appVolume = 1.0f; private set
     @Volatile var codecLabel = ""; private set
+    @Volatile var outputPathLabel = ""; private set
+    private var baseOutputPathLabel = ""
     @Volatile private var pendingReset = false
 
     fun markSessionEnded() { pendingReset = true }
@@ -32,6 +78,10 @@ class AudioRenderer {
             try {
                 it.pause()
                 it.flush()
+                totalPcmBytesWritten = 0L
+                cachedOutputQueueMs = 0L
+                outputQueueSampleAtMs = 0L
+                outputQueueEstimateInitialized = false
                 it.play()
             } catch (e: IllegalStateException) {
                 Log.w(TAG, "Unable to flush PCM output", e)
@@ -53,10 +103,10 @@ class AudioRenderer {
             }
             currentCt = CT_PCM
             currentPcmFormat = format
-            codecLabel = "ALAC · CD ${bits}-bit / ${sampleRate / 1000.0} kHz"
+            codecLabel = "ALAC lossless · ${bits}-bit / ${formatSampleRate(sampleRate)}"
             _ensureAudioTrack(sampleRate, channels)
         }
-        track?.write(data, 0, data.size)
+        writePcm(data)
     }
 
     fun feedAudio(data: ByteArray, ct: Int, ntpTimeNs: Long) {
@@ -107,7 +157,7 @@ class AudioRenderer {
 
     private fun _feedSoftwareAlac(data: ByteArray) {
         val pcm = NativeBridge.nativeAlacDecode(swAlacHandle, data) ?: return
-        track?.write(pcm, 0, pcm.size)
+        writePcm(pcm)
     }
 
     private fun _startSoftwareAlac() {
@@ -118,13 +168,18 @@ class AudioRenderer {
             return
         }
         currentCt = CT_ALAC
-        codecLabel = "ALAC (SW)"
+        codecLabel = "ALAC lossless · 16-bit / 44.1 kHz (SW)"
         _ensureAudioTrack()
     }
 
     private fun start(ct: Int) {
         currentCt = ct
-        codecLabel = when (ct) { CT_ALAC -> "ALAC"; CT_AAC_LC -> "AAC-LC"; CT_AAC_ELD -> "AAC-ELD"; else -> "?" }
+        codecLabel = when (ct) {
+            CT_ALAC -> "ALAC lossless · 16-bit / 44.1 kHz"
+            CT_AAC_LC -> "AAC-LC · lossy"
+            CT_AAC_ELD -> "AAC-ELD · lossy"
+            else -> "?"
+        }
         val format = when (ct) {
             CT_AAC_ELD -> {
                 MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 2).apply {
@@ -190,6 +245,8 @@ class AudioRenderer {
 
     private fun _ensureAudioTrack(sampleRate: Int = 44100, channels: Int = 2) {
         if (track != null) return
+        outputChannels = channels
+        outputSampleRate = sampleRate
         val channelMask = if (channels == 1) {
             AudioFormat.CHANNEL_OUT_MONO
         } else {
@@ -209,28 +266,144 @@ class AudioRenderer {
             channelMask,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        track = AudioTrack(attrs, fmt, bufSize * audioBufferMultiplier.coerceIn(4, 8), AudioTrack.MODE_STREAM, 0).also {
-            it.setVolume(volume)
+        if (bufSize <= 0) {
+            Log.e(TAG, "Unsupported PCM output: $sampleRate Hz, $channels ch (minBuffer=$bufSize)")
+            return
+        }
+        val frameSize = channels * Short.SIZE_BYTES
+        val requestedSize = max(bufSize * audioBufferMultiplier.coerceIn(4, 8), frameSize)
+        val alignedSize = requestedSize - (requestedSize % frameSize)
+        val newTrack = try {
+            AudioTrack.Builder()
+                .setAudioAttributes(attrs)
+                .setAudioFormat(fmt)
+                .setBufferSizeInBytes(alignedSize)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to create PCM AudioTrack", e)
+            return
+        }
+        if (newTrack.state != AudioTrack.STATE_INITIALIZED) {
+            Log.e(TAG, "PCM AudioTrack was not initialized")
+            newTrack.release()
+            return
+        }
+
+        val nativeRate = AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC)
+        val direct = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            AudioTrack.isDirectPlaybackSupported(fmt, attrs)
+        baseOutputPathLabel = when {
+            direct && nativeRate == sampleRate -> "PCM · $sampleRate Hz · direct supported"
+            nativeRate == sampleRate -> "PCM mixer · native $nativeRate Hz"
+            else -> "PCM mixer · $sampleRate → $nativeRate Hz"
+        }
+        refreshOutputPathLabel()
+        Log.i(
+            TAG,
+            "PCM output: requested=$sampleRate Hz/$channels ch/16-bit, " +
+                "native=$nativeRate Hz, directSupported=$direct, buffer=$alignedSize, " +
+                "losslessOutput=$losslessOutput",
+        )
+
+        track = newTrack.also {
+            totalPcmBytesWritten = 0L
+            cachedOutputQueueMs = 0L
+            outputQueueSampleAtMs = 0L
+            outputQueueEstimateInitialized = false
+            it.setVolume(effectiveTrackVolume())
             it.play()
         }
     }
 
     private fun drainOutput() {
         val c = codec ?: return
-        val t = track ?: return
+        if (track == null) return
         val info = MediaCodec.BufferInfo()
         while (true) {
             val idx = c.dequeueOutputBuffer(info, 0)
             if (idx >= 0) {
                 val buf = c.getOutputBuffer(idx) ?: break
                 val pcm = ByteArray(info.size)
+                buf.position(info.offset)
+                buf.limit(info.offset + info.size)
                 buf.get(pcm)
-                t.write(pcm, 0, pcm.size)
+                writePcm(pcm)
                 c.releaseOutputBuffer(idx, false)
             } else {
                 break
             }
         }
+    }
+
+    /**
+     * AudioTrack may legally accept fewer bytes than requested, even for a
+     * streaming track. Keep writing until the complete decoded ALAC frame has
+     * reached the PCM sink so packet boundaries cannot turn into audio loss.
+     */
+    private fun writePcm(data: ByteArray) {
+        val output = track ?: return
+        vocalReducer.processInPlace(
+            pcm = data,
+            channels = outputChannels,
+            sampleRate = outputSampleRate,
+            reduction = if (karaokeEnabled) {
+                1f - karaokeVocalLevel / 100f
+            } else {
+                0f
+            },
+        )
+        if (spatialEnhancementEnabled) {
+            spatialEnhancer.processInPlace(data, outputChannels)
+        }
+        var offset = 0
+        while (offset < data.size) {
+            val written = output.write(
+                data,
+                offset,
+                data.size - offset,
+                AudioTrack.WRITE_BLOCKING,
+            )
+            if (written <= 0) {
+                Log.e(TAG, "PCM write failed at $offset/${data.size}: $written")
+                pendingReset = true
+                return
+            }
+            totalPcmBytesWritten += written
+            offset += written
+        }
+    }
+
+    /**
+     * Estimates PCM that has entered AudioTrack but has not reached the
+     * speaker yet. The lyric clock subtracts this small local queue so visual
+     * highlighting follows audible output instead of decoded input.
+     */
+    fun estimatedQueuedAudioMs(): Long {
+        val now = SystemClock.elapsedRealtime()
+        if (now - outputQueueSampleAtMs < OUTPUT_QUEUE_SAMPLE_INTERVAL_MS) {
+            return cachedOutputQueueMs
+        }
+        val output = track ?: return 0L
+        val frameBytes = outputChannels * Short.SIZE_BYTES
+        if (frameBytes <= 0 || outputSampleRate <= 0) return 0L
+        val writtenFrames = totalPcmBytesWritten / frameBytes
+        val playedFrames = runCatching {
+            output.playbackHeadPosition.toLong() and 0xffff_ffffL
+        }.getOrElse { return cachedOutputQueueMs }
+        val queuedFrames = (writtenFrames - playedFrames).coerceAtLeast(0L)
+        val measured = (queuedFrames * 1_000L / outputSampleRate)
+            .coerceIn(0L, MAX_REPORTED_OUTPUT_QUEUE_MS)
+        val estimate = smoothAudioQueueEstimate(
+            previousMs = cachedOutputQueueMs,
+            measuredMs = measured,
+            elapsedMs = now - outputQueueSampleAtMs,
+            initialized = outputQueueEstimateInitialized,
+        )
+        cachedOutputQueueMs = estimate
+        outputQueueSampleAtMs = now
+        outputQueueEstimateInitialized = true
+        return estimate
     }
 
     fun setVolume(vol: Float) {
@@ -240,8 +413,63 @@ class AudioRenderer {
             vol >= 0f -> 1f
             else -> 10f.pow(vol / 20f)
         }
-        track?.setVolume(volume)
+        track?.setVolume(effectiveTrackVolume())
     }
+
+    /**
+     * Controls only this receiver's AudioTrack. When both the AirPlay sender
+     * and the app are at 100%, decoded PCM stays at unity gain. Lowering
+     * either control intentionally attenuates this stream without touching
+     * Android TV's system mixer volume.
+     */
+    fun setAppVolume(value: Float) {
+        appVolume = value.coerceIn(0f, 1f)
+        track?.setVolume(effectiveTrackVolume())
+    }
+
+    /**
+     * Widens stereo PCM inside this app. This is intentionally separate from
+     * Dolby Atmos: it does not invent object metadata or alter system audio.
+     */
+    fun setSpatialEnhancementEnabled(enabled: Boolean) {
+        spatialEnhancementEnabled = enabled
+        refreshOutputPathLabel()
+        Log.i(TAG, "Spatial / surround enhancement: ${if (enabled) "on" else "off"}")
+    }
+
+    /**
+     * Controls centre-channel attenuation used by Karaoke Mode. A vocal level
+     * of 100 keeps the original mix; 0 applies the strongest reduction.
+     */
+    fun setKaraokeMode(enabled: Boolean, vocalLevelPercent: Int) {
+        karaokeEnabled = enabled
+        karaokeVocalLevel = vocalLevelPercent.coerceIn(0, 100)
+        refreshOutputPathLabel()
+        Log.i(
+            TAG,
+            "Karaoke vocal reduction: ${if (enabled) "on" else "off"} " +
+                "(vocalLevel=$karaokeVocalLevel%)",
+        )
+    }
+
+    private fun refreshOutputPathLabel() {
+        if (baseOutputPathLabel.isBlank()) {
+            outputPathLabel = ""
+            return
+        }
+        val effects = buildList {
+            if (karaokeEnabled) add("Smart Vocal Focus $karaokeVocalLevel%")
+            if (spatialEnhancementEnabled) add("Spatial stereo")
+        }
+        outputPathLabel = if (effects.isEmpty()) {
+            baseOutputPathLabel
+        } else {
+            "$baseOutputPathLabel · ${effects.joinToString(" · ")}"
+        }
+    }
+
+    private fun effectiveTrackVolume(): Float =
+        resolveTrackGain(volume, appVolume)
 
     fun stop() {
         track?.let { try { it.stop(); it.release() } catch (_: Exception) {} }
@@ -254,17 +482,35 @@ class AudioRenderer {
         }
         currentCt = -1
         currentPcmFormat = null
+        outputChannels = 2
+        outputSampleRate = 44100
+        totalPcmBytesWritten = 0L
+        cachedOutputQueueMs = 0L
+        outputQueueSampleAtMs = 0L
+        outputQueueEstimateInitialized = false
+        vocalReducer.reset()
         failedCt = -1
         codecLabel = ""
+        baseOutputPathLabel = ""
+        outputPathLabel = ""
     }
 
     fun release() = stop()
 
     companion object {
+        private const val MAX_REPORTED_OUTPUT_QUEUE_MS = 1_200L
+        private const val OUTPUT_QUEUE_SAMPLE_INTERVAL_MS = 40L
         private const val TAG = "AudioRenderer"
         const val CT_ALAC = 2
         const val CT_AAC_LC = 4
         const val CT_AAC_ELD = 8
         const val CT_PCM = 0
+
+        private fun formatSampleRate(sampleRate: Int): String =
+            if (sampleRate % 1000 == 0) {
+                "${sampleRate / 1000} kHz"
+            } else {
+                "${sampleRate / 1000.0} kHz"
+            }
     }
 }

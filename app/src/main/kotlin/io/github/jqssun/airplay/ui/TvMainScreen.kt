@@ -3,11 +3,7 @@ package io.github.jqssun.airplay.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -16,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -103,6 +100,7 @@ internal fun TvMainScreen(
 ) {
     var destination by remember { mutableStateOf(TvDestination.HOME) }
     val state by viewModel.serverState.collectAsState()
+    val serverName by viewModel.serverName.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val mirroring by viewModel.mirroringActive.collectAsState()
     val immersiveNowPlaying = showAudioMode && state == ServerState.RUNNING &&
@@ -140,6 +138,7 @@ internal fun TvMainScreen(
 
     TvIdleScreen(
         state = state,
+        serverName = serverName,
         onSettings = { destination = TvDestination.SETTINGS },
     )
 }
@@ -147,98 +146,133 @@ internal fun TvMainScreen(
 @Composable
 private fun TvIdleScreen(
     state: ServerState,
+    serverName: String,
     onSettings: () -> Unit,
 ) {
-    val settingsFocus = remember { FocusRequester() }
-    val pulse = rememberInfiniteTransition(label = "airPlayIdlePulse")
-    val glow by pulse.animateFloat(
-        initialValue = 0.14f,
-        targetValue = 0.32f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2_200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "airPlayIdleGlow",
-    )
-    val breathe by pulse.animateFloat(
-        initialValue = 0.975f,
-        targetValue = 1.025f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2_900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "airPlayIdleBreathe",
-    )
+    val idleFocus = remember { FocusRequester() }
     val ready = state == ServerState.RUNNING
     val foreground = if (ready) Color(0xFFF2F3F5) else Color(0xFFFFA1A1)
 
     LaunchedEffect(Unit) {
-        runCatching { settingsFocus.requestFocus() }
+        runCatching { idleFocus.requestFocus() }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .focusRequester(idleFocus)
+            .focusable()
             .background(
                 Brush.radialGradient(
-                    colors = listOf(Color(0xFF171A20), Color(0xFF08090D)),
-                    radius = 820f,
+                    colors = listOf(Color(0xFF18232B), Color(0xFF070B10)),
+                    radius = 1_050f,
                 )
             ),
     ) {
+        val scale = minOf(maxWidth.value / 960f, maxHeight.value / 540f)
+            .coerceIn(0.78f, 1.8f)
+
         IconButton(
             onClick = onSettings,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 30.dp, end = 34.dp)
-                .size(54.dp)
-                .focusRequester(settingsFocus)
+                .padding(top = (20f * scale).dp, end = (24f * scale).dp)
+                .size((43f * scale).dp)
                 .dpadFocus(CircleShape),
         ) {
             Icon(
                 Icons.Default.Settings,
                 contentDescription = stringResource(R.string.tv_nav_settings),
-                tint = Color(0xFFD7D9DF),
-                modifier = Modifier.size(25.dp),
+                tint = Color(0xFFD7DDE2).copy(alpha = 0.74f),
+                modifier = Modifier.size((20f * scale).dp),
             )
         }
 
-        Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Row(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = (118f * scale).dp),
+            horizontalArrangement = Arrangement.spacedBy((76f * scale).dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(180.dp)
-                    .graphicsLayer {
-                        scaleX = breathe
-                        scaleY = breathe
-                    }
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(
-                                Color(0xFFB4D9FF).copy(alpha = glow),
-                                Color.Transparent,
-                            )
-                        ),
-                        CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                AirPlayGlyph(
+            Column(modifier = Modifier.width((300f * scale).dp)) {
+                Text(
+                    text = "AirPlay",
                     color = foreground,
-                    modifier = Modifier.size(112.dp),
+                    fontSize = (42f * scale).sp,
+                    lineHeight = (46f * scale).sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height((13f * scale).dp))
+                Text(
+                    text = "Wirelessly share music from your\niPhone, iPad, or Mac.",
+                    color = foreground.copy(alpha = 0.74f),
+                    fontSize = (15f * scale).sp,
+                    lineHeight = (18f * scale).sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height((22f * scale).dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy((22f * scale).dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AirPlayGlyph(
+                        color = foreground.copy(alpha = 0.9f),
+                        modifier = Modifier.size((45f * scale).dp),
+                    )
+                    Icon(
+                        imageVector = Icons.Default.Cast,
+                        contentDescription = null,
+                        tint = foreground.copy(alpha = 0.9f),
+                        modifier = Modifier.size((43f * scale).dp),
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.width((360f * scale).dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape((3f * scale).dp))
+                        .background(Color(0xFF7E888E).copy(alpha = if (ready) 0.72f else 0.42f))
+                        .padding(
+                            horizontal = (17f * scale).dp,
+                            vertical = (13f * scale).dp,
+                        ),
+                ) {
+                    Text(
+                        text = if (ready) "CHOOSE THIS DEVICE" else "RECEIVER OFFLINE",
+                        color = foreground.copy(alpha = 0.86f),
+                        fontSize = (11f * scale).sp,
+                        lineHeight = (14f * scale).sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = (0.3f * scale).sp,
+                    )
+                    Spacer(Modifier.height((2f * scale).dp))
+                    Text(
+                        text = serverName.ifBlank { "Airplay Speaker" },
+                        color = foreground,
+                        fontSize = (21f * scale).sp,
+                        lineHeight = (24f * scale).sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height((13f * scale).dp))
+                Text(
+                    text = if (ready) {
+                        "Make sure your Mac or iOS device is connected to the same Wi-Fi network as this device.\nFor more information visit apple.com/airplay"
+                    } else {
+                        "Open Settings to start the AirPlay receiver, then choose this device from Music or Control Center."
+                    },
+                    color = foreground.copy(alpha = 0.64f),
+                    fontSize = (10.5f * scale).sp,
+                    lineHeight = (13.5f * scale).sp,
+                    fontWeight = FontWeight.Medium,
                 )
             }
-            Spacer(Modifier.height(18.dp))
-            Text(
-                if (ready) stringResource(R.string.tv_listening)
-                else stringResource(R.string.tv_receiver_stopped),
-                color = foreground.copy(alpha = 0.82f),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 2.2.sp,
-            )
         }
     }
 }
@@ -710,6 +744,9 @@ private fun TvSettingsPanel(
     val autoStart by viewModel.autoStart.collectAsState()
     val alac by viewModel.alacEnabled.collectAsState()
     val swAlac by viewModel.swAlacEnabled.collectAsState()
+    val losslessOutput by viewModel.losslessOutput.collectAsState()
+    val spatialEnhancement by viewModel.spatialEnhancement.collectAsState()
+    val karaokeEnabled by viewModel.karaokeEnabled.collectAsState()
     val allowNew by viewModel.allowNewConn.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
@@ -797,6 +834,30 @@ private fun TvSettingsPanel(
                     stringResource(R.string.setting_alac_desc),
                     alac,
                     viewModel::setAlacEnabled,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_lossless_output),
+                    stringResource(R.string.setting_lossless_output_desc),
+                    losslessOutput,
+                    viewModel::setLosslessOutput,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_spatial_enhancement),
+                    stringResource(R.string.setting_spatial_enhancement_desc),
+                    spatialEnhancement,
+                    viewModel::setSpatialEnhancement,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_karaoke_mode),
+                    stringResource(R.string.setting_karaoke_mode_desc),
+                    karaokeEnabled,
+                    viewModel::setKaraokeEnabled,
                 )
             }
             item {

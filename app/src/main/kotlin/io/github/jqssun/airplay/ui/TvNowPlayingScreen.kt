@@ -9,12 +9,14 @@ import android.graphics.RadialGradient as AndroidRadialGradient
 import android.graphics.Shader as AndroidShader
 import android.view.TextureView
 import android.view.KeyEvent as AndroidKeyEvent
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -49,13 +51,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lyrics
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -91,7 +96,9 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.KeyEventType
@@ -117,6 +124,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import io.github.jqssun.airplay.R
@@ -125,9 +133,15 @@ import io.github.jqssun.airplay.lyrics.LyricAlignment
 import io.github.jqssun.airplay.lyrics.LyricLine
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
+import io.github.jqssun.airplay.lyrics.combinedDisplayText
 import io.github.jqssun.airplay.lyrics.lyricWordProgress
 import io.github.jqssun.airplay.lyrics.lyricWordsMatchLine
+import io.github.jqssun.airplay.lyrics.lyricHighlightGraphemeRange
+import io.github.jqssun.airplay.lyrics.lyricHighlightGlyphPulse
+import io.github.jqssun.airplay.lyrics.lyricHighlightGlyphScale
+import io.github.jqssun.airplay.lyrics.lyricSustainedWordAura
 import io.github.jqssun.airplay.lyrics.progressiveTextSlice
+import io.github.jqssun.airplay.lyrics.smoothLyricDisplayPosition
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -138,6 +152,28 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private const val LYRICS_BUTTON_HIDE_DELAY_MS = 5_000L
+private const val QUEUE_BROWSE_RETURN_DELAY_MS = 4_000L
+private const val LYRIC_CLOCK_SAMPLE_INTERVAL_NS = 80_000_000L
+private val AppleLyricEasing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+
+internal fun lyricsPageVisible(lyricsEnabled: Boolean, queueBrowsing: Boolean): Boolean =
+    lyricsEnabled && !queueBrowsing
+
+internal fun boundedLyricAuraRadius(
+    desiredRadius: Float,
+    centerX: Float,
+    centerY: Float,
+    width: Float,
+    height: Float,
+): Float {
+    val availableRadius = minOf(
+        centerX,
+        width - centerX,
+        centerY,
+        height - centerY,
+    ).coerceAtLeast(0f)
+    return minOf(desiredRadius.coerceAtLeast(0f), availableRadius * 0.92f)
+}
 
 /** Dedicated ten-foot Now Playing surface, proportioned around a 1920 x 1080 canvas. */
 @Composable
@@ -148,12 +184,20 @@ internal fun TvNowPlayingScreen(
     val track by viewModel.trackInfo.collectAsState()
     val lyrics by viewModel.lyrics.collectAsState()
     val playing by viewModel.audioPlaying.collectAsState()
+    val audioPositionMs by viewModel.audioPositionMs.collectAsState()
+    val audioOutputStatus by viewModel.audioOutputStatus.collectAsState()
+    val appVolume by viewModel.appVolume.collectAsState()
+    val appVolumeActivity by viewModel.appVolumeActivity.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
+    val karaokeEnabled by viewModel.karaokeEnabled.collectAsState()
+    val karaokeVocalLevel by viewModel.karaokeVocalLevel.collectAsState()
     val animatedArtworkUrl by viewModel.animatedArtworkUrl.collectAsState()
     val animatedArtworkCover by viewModel.animatedArtworkCover.collectAsState()
     val lyricsVisible by viewModel.lyricsVisible.collectAsState()
     val previousTrack by viewModel.previousTrack.collectAsState()
     val upNextTracks by viewModel.upNextTracks.collectAsState()
+    val queueName by viewModel.queueName.collectAsState()
+    val collectionName = queueName.ifBlank { track.album }
     val displayArtwork = if (motionArtworkEnabled) animatedArtworkCover ?: track.coverArt else track.coverArt
     val extracted = remember(displayArtwork) { extractArtworkPalette(displayArtwork) }
     val primary by animateColorAsState(extracted.primary, tween(1_400), label = "artPrimary")
@@ -171,6 +215,13 @@ internal fun TvNowPlayingScreen(
     var lyricsButtonShown by remember { mutableStateOf(true) }
     var lyricsButtonActivity by remember { mutableLongStateOf(0L) }
     var lyricsButtonFocusPending by remember { mutableStateOf(false) }
+    var queueBrowseActivity by remember { mutableLongStateOf(0L) }
+    var queueAutoReturnToLyrics by remember { mutableStateOf(false) }
+    var queueBrowsing by remember { mutableStateOf(false) }
+    var appVolumeOverlayShown by remember { mutableStateOf(false) }
+    var karaokePanelShown by remember { mutableStateOf(false) }
+    var karaokeControlSelection by remember { mutableIntStateOf(0) }
+    val showLyricsPage = lyricsPageVisible(lyricsVisible, queueBrowsing)
     val minimumQueueSelection = if (previousTrack != null) -1 else 0
     val maximumQueueSelection = upNextTracks.size
 
@@ -179,15 +230,25 @@ internal fun TvNowPlayingScreen(
     }
     LaunchedEffect(track.title, track.artist, track.album) {
         queueSelection = 0
+        karaokePanelShown = false
+        runCatching { rootFocus.requestFocus() }
+    }
+    BackHandler(enabled = karaokePanelShown) {
+        karaokePanelShown = false
+        runCatching { rootFocus.requestFocus() }
     }
     LaunchedEffect(lyricsVisible) {
-        if (lyricsVisible) queueSelection = 0
+        if (!lyricsVisible) {
+            queueSelection = 0
+            queueAutoReturnToLyrics = false
+            queueBrowsing = false
+        }
     }
     LaunchedEffect(minimumQueueSelection, maximumQueueSelection) {
         queueSelection = queueSelection.coerceIn(minimumQueueSelection, maximumQueueSelection)
     }
-    LaunchedEffect(queueSelection, lyricsVisible) {
-        if (!lyricsVisible && queueSelection > 0) {
+    LaunchedEffect(queueSelection, showLyricsPage) {
+        if (!showLyricsPage && queueSelection > 0) {
             viewModel.prefetchQueueArtwork(queueSelection - 1)
         }
     }
@@ -196,6 +257,20 @@ internal fun TvNowPlayingScreen(
         lyricsButtonFocusPending = false
         runCatching { rootFocus.requestFocus() }
         lyricsButtonShown = false
+    }
+    LaunchedEffect(queueBrowseActivity, queueAutoReturnToLyrics) {
+        if (!queueAutoReturnToLyrics) return@LaunchedEffect
+        delay(QUEUE_BROWSE_RETURN_DELAY_MS)
+        queueAutoReturnToLyrics = false
+        queueBrowsing = false
+        queueSelection = 0
+        runCatching { rootFocus.requestFocus() }
+    }
+    LaunchedEffect(appVolumeActivity) {
+        if (appVolumeActivity == 0L) return@LaunchedEffect
+        appVolumeOverlayShown = true
+        delay(1_500L)
+        appVolumeOverlayShown = false
     }
     LaunchedEffect(lyricsButtonShown, lyricsButtonFocusPending) {
         if (lyricsButtonShown && lyricsButtonFocusPending) {
@@ -216,48 +291,90 @@ internal fun TvNowPlayingScreen(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 lyricsButtonShown = true
                 lyricsButtonActivity++
-                when (event.nativeKeyEvent.keyCode) {
+                val keyCode = event.nativeKeyEvent.keyCode
+                if (karaokePanelShown) {
+                    when (keyCode) {
+                        AndroidKeyEvent.KEYCODE_VOLUME_UP,
+                        AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                            viewModel.adjustKaraokeVocalLevel(5)
+                            return@onPreviewKeyEvent true
+                        }
+                        AndroidKeyEvent.KEYCODE_VOLUME_DOWN,
+                        AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                            viewModel.adjustKaraokeVocalLevel(-5)
+                            return@onPreviewKeyEvent true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                            karaokeControlSelection = 0
+                            return@onPreviewKeyEvent true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            karaokeControlSelection = 1
+                            return@onPreviewKeyEvent true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+                        AndroidKeyEvent.KEYCODE_ENTER,
+                        AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
+                        AndroidKeyEvent.KEYCODE_BUTTON_A -> {
+                            if (karaokeControlSelection == 0) {
+                                viewModel.setKaraokeEnabled(!karaokeEnabled)
+                            } else {
+                                karaokePanelShown = false
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        AndroidKeyEvent.KEYCODE_BACK -> {
+                            karaokePanelShown = false
+                            return@onPreviewKeyEvent true
+                        }
+                    }
+                }
+                when (keyCode) {
                     AndroidKeyEvent.KEYCODE_MENU -> {
                         onSettings()
                         true
                     }
                     AndroidKeyEvent.KEYCODE_CAPTIONS -> {
+                        queueAutoReturnToLyrics = false
+                        queueBrowsing = false
                         viewModel.setLyricsVisible(!lyricsVisible)
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (lyricsVisible) {
-                            lyricsButtonFocusPending = true
-                        } else {
-                            runCatching { rootFocus.requestFocus() }
-                            queueSelection = (queueSelection + 1).coerceAtMost(maximumQueueSelection)
-                        }
+                        lyricsButtonFocusPending = false
+                        runCatching { rootFocus.requestFocus() }
+                        queueBrowsing = true
+                        queueSelection = (queueSelection + 1).coerceAtMost(maximumQueueSelection)
+                        queueAutoReturnToLyrics = true
+                        queueBrowseActivity++
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        lyricsButtonFocusPending = false
                         runCatching { rootFocus.requestFocus() }
-                        if (!lyricsVisible) {
-                            queueSelection = (queueSelection - 1).coerceAtLeast(minimumQueueSelection)
-                        }
+                        queueBrowsing = true
+                        queueSelection = (queueSelection - 1).coerceAtLeast(minimumQueueSelection)
+                        queueAutoReturnToLyrics = true
+                        queueBrowseActivity++
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                        if (lyricsVisible) {
+                        if (showLyricsPage) {
                             lyricBrowseDirection = -1
                             lyricBrowseSignal++
                             true
                         } else {
-                            runCatching { rootFocus.requestFocus() }
+                            lyricsButtonFocusPending = true
                             true
                         }
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (lyricsVisible) {
+                        if (showLyricsPage) {
                             lyricBrowseDirection = 1
                             lyricBrowseSignal++
                             true
                         } else {
-                            lyricsButtonFocusPending = true
+                            runCatching { rootFocus.requestFocus() }
                             true
                         }
                     }
@@ -265,7 +382,12 @@ internal fun TvNowPlayingScreen(
                     AndroidKeyEvent.KEYCODE_ENTER,
                     AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
                     AndroidKeyEvent.KEYCODE_BUTTON_A -> {
-                        if (!lyricsVisible && !lyricsButtonFocused) {
+                        if (showLyricsPage) {
+                            if (!karaokeEnabled) viewModel.setKaraokeEnabled(true)
+                            karaokePanelShown = true
+                            karaokeControlSelection = 0
+                            true
+                        } else if (!lyricsButtonFocused) {
                             when {
                                 queueSelection < 0 -> viewModel.playPreviousQueueTrack()
                                 queueSelection > 0 -> viewModel.playQueuedTrack(queueSelection)
@@ -289,7 +411,7 @@ internal fun TvNowPlayingScreen(
         )
 
         val queueLayoutProgress by animateFloatAsState(
-            targetValue = if (lyricsVisible) 0f else 1f,
+            targetValue = if (showLyricsPage) 0f else 1f,
             animationSpec = spring(
                 dampingRatio = 0.86f,
                 stiffness = Spring.StiffnessLow,
@@ -323,7 +445,7 @@ internal fun TvNowPlayingScreen(
         )
 
         AnimatedVisibility(
-            visible = lyricsVisible,
+            visible = showLyricsPage,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(
@@ -343,7 +465,7 @@ internal fun TvNowPlayingScreen(
                 muted = muted,
                 scale = scale,
                 durationMs = track.durationMs,
-                writerCredit = track.composer,
+                writerCredit = lyrics.writerCredit.ifBlank { track.composer },
                 playing = playing,
                 browseSignal = lyricBrowseSignal,
                 browseDirection = lyricBrowseDirection,
@@ -352,10 +474,10 @@ internal fun TvNowPlayingScreen(
         }
 
         AnimatedVisibility(
-            visible = lyricsButtonShown,
+            visible = !showLyricsPage && lyricsButtonShown,
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = (27f * scale).dp, bottom = (24f * scale).dp),
+                .align(Alignment.TopEnd)
+                .padding(end = (27f * scale).dp, top = (24f * scale).dp),
             enter = fadeIn(tween(180)),
             exit = fadeOut(tween(280)),
         ) {
@@ -367,12 +489,133 @@ internal fun TvNowPlayingScreen(
                 onClick = {
                     lyricsButtonShown = true
                     lyricsButtonActivity++
+                    queueAutoReturnToLyrics = false
+                    queueBrowsing = false
                     viewModel.setLyricsVisible(!lyricsVisible)
                 },
                 onFocusedChange = { lyricsButtonFocused = it },
             )
         }
+
+        AnimatedVisibility(
+            visible = showLyricsPage && lyricsButtonShown && !karaokePanelShown,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = (27f * scale).dp, top = (24f * scale).dp),
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(220)),
+        ) {
+            KaraokeQuickBadge(
+                enabled = karaokeEnabled,
+                paper = paper,
+                scale = scale,
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showLyricsPage && karaokePanelShown,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = (30f * scale).dp),
+            enter = fadeIn(tween(220)) + slideInHorizontally(tween(300)) { it / 3 },
+            exit = fadeOut(tween(180)) + slideOutHorizontally(tween(240)) { it / 3 },
+        ) {
+            KaraokeControlPanel(
+                enabled = karaokeEnabled,
+                vocalLevel = karaokeVocalLevel,
+                selectedControl = karaokeControlSelection,
+                paper = paper,
+                accent = accent,
+                scale = scale,
+            )
+        }
+
+        AnimatedVisibility(
+            visible = !showLyricsPage && collectionName.isNotBlank(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = (21f * scale).dp),
+            enter = fadeIn(tween(420)),
+            exit = fadeOut(tween(220)),
+        ) {
+            NoLyricsCollectionHeading(
+                name = collectionName,
+                paper = paper,
+                scale = scale,
+            )
+        }
+
+        AnimatedVisibility(
+            visible = !showLyricsPage,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+            enter = fadeIn(tween(420)),
+            exit = fadeOut(tween(220)),
+        ) {
+            NoLyricsPlaybackFooter(
+                viewModel = viewModel,
+                sourcePositionMs = audioPositionMs,
+                durationMs = track.durationMs,
+                audioOutputStatus = audioOutputStatus,
+                playing = playing,
+                accent = accent,
+                paper = paper,
+                muted = muted,
+                scale = scale,
+            )
+        }
+
+        AnimatedVisibility(
+            visible = appVolumeOverlayShown,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(220)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape((18f * scale).dp))
+                    .background(Color.Black.copy(alpha = 0.58f))
+                    .border(
+                        width = (0.8f * scale).dp,
+                        color = paper.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape((18f * scale).dp),
+                    )
+                    .padding(
+                        horizontal = (21f * scale).dp,
+                        vertical = (12f * scale).dp,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (appVolume == 0) "APP MUTED" else "APP VOLUME  $appVolume%",
+                    color = paper,
+                    fontSize = (13f * scale).sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (0.7f * scale).sp,
+                    maxLines = 1,
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun NoLyricsCollectionHeading(
+    name: String,
+    paper: Color,
+    scale: Float,
+) {
+    BouncingFadingText(
+        text = name,
+        color = paper.copy(alpha = 0.92f),
+        style = TextStyle(
+            fontSize = (15f * scale).sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        ),
+        modifier = Modifier.width((390f * scale).dp),
+    )
 }
 
 @Composable
@@ -393,64 +636,62 @@ private fun NoLyricsQueueStage(
     artworkMotionEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var lastOffset by remember { mutableIntStateOf(selectedOffset) }
-    val slideIn = remember { Animatable(0f) }
-    LaunchedEffect(selectedOffset) {
-        val direction = (selectedOffset - lastOffset).coerceIn(-1, 1)
-        lastOffset = selectedOffset
-        if (direction != 0) {
-            slideIn.snapTo(direction * 34f)
-            slideIn.animateTo(0f, tween(330, easing = FastOutSlowInEasing))
-        }
-    }
-
     fun trackAt(offset: Int): TrackInfo? = when {
         offset < 0 -> previous
         offset == 0 -> current.copy(coverArt = currentArtwork)
         else -> upNext.getOrNull(offset - 1)
     }
 
-    fun labelAt(offset: Int): String = when {
-        offset < 0 -> "PREVIOUS"
-        offset == 0 -> "NOW PLAYING"
-        else -> "UP NEXT  •  $offset"
+    val firstOffset = if (previous != null) -1 else 0
+    val offsets = remember(firstOffset, upNext.size) {
+        (firstOffset..upNext.size).toList()
+    }
+    val selectedIndex = (selectedOffset - firstOffset).coerceIn(0, offsets.lastIndex)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+    LaunchedEffect(selectedIndex, offsets.size) {
+        listState.animateScrollToItem(selectedIndex)
     }
 
-    Row(
-        modifier = modifier
-            .padding(horizontal = (30f * scale).dp)
-            .graphicsLayer {
-                translationX = slideIn.value * scale * density
-            },
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        (selectedOffset - 1..selectedOffset + 1).forEachIndexed { slot, offset ->
-            val valid = offset in (if (previous != null) -1 else 0)..upNext.size
-            EqualQueueTrackCard(
-                label = if (valid) labelAt(offset) else if (offset < 0) "START OF QUEUE" else "END OF QUEUE",
-                track = trackAt(offset).takeIf { valid },
-                selected = slot == 1,
-                isCurrent = offset == 0,
-                visibility = if (slot == 1) 1f else sideCardsVisibility,
-                decorationVisibility = sideCardsVisibility,
-                emergeDirection = slot - 1,
-                animatedArtworkUrl = animatedArtworkUrl.takeIf { offset == 0 && artworkMotionEnabled },
-                primary = primary,
-                secondary = secondary,
-                paper = paper,
-                muted = muted,
-                scale = scale,
-                playing = playing,
-            )
-            if (slot < 2) Spacer(Modifier.width((18f * scale).dp))
+    BoxWithConstraints(modifier = modifier) {
+        val cardWidth = (300f * scale).dp
+        val centrePadding = maxOf(0.dp, (maxWidth - cardWidth) / 2)
+        LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = centrePadding),
+            horizontalArrangement = Arrangement.spacedBy((4f * scale).dp),
+            verticalAlignment = Alignment.CenterVertically,
+            userScrollEnabled = false,
+        ) {
+            itemsIndexed(
+                items = offsets,
+                key = { _, offset -> offset },
+            ) { _, offset ->
+                val selected = offset == selectedOffset
+                EqualQueueTrackCard(
+                    track = trackAt(offset),
+                    selected = selected,
+                    isCurrent = offset == 0,
+                    visibility = if (selected) 1f else sideCardsVisibility,
+                    decorationVisibility = sideCardsVisibility,
+                    emergeDirection = (offset - selectedOffset).coerceIn(-1, 1),
+                    animatedArtworkUrl = animatedArtworkUrl.takeIf {
+                        offset == 0 && artworkMotionEnabled
+                    },
+                    primary = primary,
+                    secondary = secondary,
+                    paper = paper,
+                    muted = muted,
+                    scale = scale,
+                    playing = playing,
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun EqualQueueTrackCard(
-    label: String,
     track: TrackInfo?,
     selected: Boolean,
     isCurrent: Boolean,
@@ -465,35 +706,38 @@ private fun EqualQueueTrackCard(
     scale: Float,
     playing: Boolean,
 ) {
-    val artSize = (270f * scale).dp
+    val artSize = (292f * scale).dp
     val cardAlpha by animateFloatAsState(
-        targetValue = if (selected) 1f else 0.68f,
-        animationSpec = tween(220),
+        targetValue = if (selected) 1f else 0.72f,
+        animationSpec = tween(280, easing = FastOutSlowInEasing),
         label = "queueCardAlpha",
+    )
+    val selectionScale by animateFloatAsState(
+        targetValue = if (selected) 1.035f else 0.965f,
+        animationSpec = spring(
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "queueCardSelectionScale",
     )
     Column(
         modifier = Modifier
-            .width((292f * scale).dp)
+            .width((300f * scale).dp)
             .graphicsLayer {
                 alpha = cardAlpha * visibility
-                val emergeScale = 0.9f + (0.1f * visibility)
+                val decoratedScale = 1f +
+                    ((selectionScale - 1f) * decorationVisibility)
+                val emergeScale = (0.94f + (0.06f * visibility)) * decoratedScale
                 scaleX = emergeScale
                 scaleY = emergeScale
-                translationX = -emergeDirection * 72f * (1f - visibility) * scale * density
-                translationY = ((if (selected) 0f else 9f) + 18f * (1f - visibility)) * scale * density
+                translationX =
+                    -emergeDirection * 54f * (1f - visibility) * scale * density
+                translationY = (
+                    (if (selected) 0f else 7f) + 14f * (1f - visibility)
+                ) * scale * density
             },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = label,
-            color = muted.copy(alpha = 0.72f),
-            fontSize = (10f * scale).sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = (1.8f * scale).sp,
-            maxLines = 1,
-            modifier = Modifier.graphicsLayer { alpha = decorationVisibility },
-        )
-        Spacer(Modifier.height((8f * scale).dp))
         Box(
             modifier = Modifier
                 .size(artSize)
@@ -534,28 +778,30 @@ private fun EqualQueueTrackCard(
             }
         }
         Spacer(Modifier.height((12f * scale).dp))
-        BouncingFadingText(
-            text = track?.title?.takeIf { it.isNotBlank() } ?: "No more songs",
-            color = paper.copy(alpha = if (track == null) 0.56f else 0.86f),
-            style = TextStyle(
-                fontSize = (18f * scale).sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-            leading = if (isCurrent && track != null) {
-                {
-                    MiniNowPlayingEqualizer(
-                        color = mix(primary, Color.White, 0.58f),
-                        scale = scale,
-                        playing = playing,
-                    )
-                    Spacer(Modifier.width((5f * scale).dp))
-                }
-            } else {
-                null
-            },
-        )
+        if (track != null) {
+            BouncingFadingText(
+                text = track.title,
+                color = paper.copy(alpha = 0.88f),
+                style = TextStyle(
+                    fontSize = (18f * scale).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                leading = if (isCurrent) {
+                    {
+                        MiniNowPlayingEqualizer(
+                            color = mix(primary, Color.White, 0.58f),
+                            scale = scale,
+                            playing = playing,
+                        )
+                        Spacer(Modifier.width((5f * scale).dp))
+                    }
+                } else {
+                    null
+                },
+            )
+        }
         Spacer(Modifier.height((2f * scale).dp))
         BouncingFadingText(
             text = track?.artist?.takeIf { it.isNotBlank() } ?: "",
@@ -576,6 +822,126 @@ private fun EqualQueueTrackCard(
                     textAlign = TextAlign.Center,
                 ),
                 modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NoLyricsPlaybackFooter(
+    viewModel: MainViewModel,
+    sourcePositionMs: Long,
+    durationMs: Long,
+    audioOutputStatus: String,
+    playing: Boolean,
+    accent: Color,
+    paper: Color,
+    muted: Color,
+    scale: Float,
+) {
+    val positionMs = rememberDisplaySyncedPosition(
+        sourcePositionMs = sourcePositionMs,
+        viewModel = viewModel,
+        enabled = playing,
+    ).coerceIn(0L, durationMs.coerceAtLeast(0L))
+    val progress = if (durationMs > 0L) {
+        positionMs.toFloat() / durationMs.toFloat()
+    } else {
+        0f
+    }.coerceIn(0f, 1f)
+    val status = audioOutputStatus.ifBlank {
+        "ALAC LOSSLESS · 16-bit / 44.1 kHz"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = (31f * scale).dp,
+                end = (31f * scale).dp,
+                bottom = (18f * scale).dp,
+            ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape((16f * scale).dp))
+                    .background(Color.Black.copy(alpha = 0.2f))
+                    .border(
+                        (0.8f * scale).dp,
+                        paper.copy(alpha = 0.36f),
+                        RoundedCornerShape((16f * scale).dp),
+                    )
+                    .padding(
+                        horizontal = (10f * scale).dp,
+                        vertical = (5f * scale).dp,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MusicNote,
+                    contentDescription = null,
+                    tint = accent.copy(alpha = 0.96f),
+                    modifier = Modifier.size((13f * scale).dp),
+                )
+                Spacer(Modifier.width((5f * scale).dp))
+                Text(
+                    text = status,
+                    color = paper.copy(alpha = 0.9f),
+                    fontSize = (9f * scale).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (0.35f * scale).sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.height((8f * scale).dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height((3f * scale).dp)
+                .clip(CircleShape)
+                .background(paper.copy(alpha = 0.24f)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(progress)
+                    .fillMaxHeight()
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                accent.copy(alpha = 0.82f),
+                                paper.copy(alpha = 0.96f),
+                            ),
+                        ),
+                    ),
+            )
+        }
+        Spacer(Modifier.height((5f * scale).dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = formatVideoTime(positionMs),
+                color = paper.copy(alpha = 0.88f),
+                fontSize = (9f * scale).sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = if (durationMs > 0L) {
+                    "-${formatVideoTime((durationMs - positionMs).coerceAtLeast(0L))}"
+                } else {
+                    "--:--"
+                },
+                color = muted.copy(alpha = 0.82f),
+                fontSize = (9f * scale).sp,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -630,6 +996,184 @@ private fun LyricsVisibilityButton(
             tint = tint,
             modifier = Modifier.size((21f * scale).dp),
         )
+    }
+}
+
+@Composable
+private fun KaraokeQuickBadge(
+    enabled: Boolean,
+    paper: Color,
+    scale: Float,
+) {
+    Box(
+        modifier = Modifier
+            .size((43f * scale).dp)
+            .clip(CircleShape)
+            .background(
+                if (enabled) paper.copy(alpha = 0.92f)
+                else Color.Black.copy(alpha = 0.24f)
+            )
+            .border(
+                (0.8f * scale).dp,
+                paper.copy(alpha = 0.24f),
+                CircleShape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Mic,
+            contentDescription = "Open Karaoke Mode",
+            tint = if (enabled) Color(0xFF17171B) else paper.copy(alpha = 0.88f),
+            modifier = Modifier.size((21f * scale).dp),
+        )
+    }
+}
+
+@Composable
+private fun KaraokeControlPanel(
+    enabled: Boolean,
+    vocalLevel: Int,
+    selectedControl: Int,
+    paper: Color,
+    accent: Color,
+    scale: Float,
+) {
+    val effectiveLevel by animateFloatAsState(
+        targetValue = if (enabled) vocalLevel / 100f else 1f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "karaokeVocalLevel",
+    )
+    Column(
+        modifier = Modifier
+            .width((166f * scale).dp)
+            .clip(RoundedCornerShape((22f * scale).dp))
+            .background(Color.Black.copy(alpha = 0.38f))
+            .border(
+                (0.8f * scale).dp,
+                paper.copy(alpha = 0.16f),
+                RoundedCornerShape((22f * scale).dp),
+            )
+            .padding(
+                horizontal = (14f * scale).dp,
+                vertical = (15f * scale).dp,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "SMART KARAOKE",
+            color = paper.copy(alpha = 0.72f),
+            fontSize = (8.1f * scale).sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (0.9f * scale).sp,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height((10f * scale).dp))
+        Box(
+            modifier = Modifier
+                .width((42f * scale).dp)
+                .height((132f * scale).dp)
+                .clip(RoundedCornerShape((18f * scale).dp))
+                .background(Color(0xFF11151A).copy(alpha = 0.92f))
+                .border(
+                    (1f * scale).dp,
+                    paper.copy(alpha = 0.1f),
+                    RoundedCornerShape((18f * scale).dp),
+                ),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(effectiveLevel.coerceAtLeast(0.055f))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                mix(paper, accent, 0.2f).copy(alpha = 0.9f),
+                                paper.copy(alpha = 0.98f),
+                            ),
+                        ),
+                    ),
+            )
+        }
+        Spacer(Modifier.height((8f * scale).dp))
+        Text(
+            text = if (enabled) "$vocalLevel% VOCALS" else "ORIGINAL MIX",
+            color = paper.copy(alpha = 0.76f),
+            fontSize = (8.2f * scale).sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height((11f * scale).dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy((9f * scale).dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            KaraokeControlCircle(
+                selected = selectedControl == 0,
+                active = enabled,
+                paper = paper,
+                scale = scale,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = if (enabled) "Disable Karaoke Mode" else "Enable Karaoke Mode",
+                    tint = if (selectedControl == 0) Color(0xFF15171B) else paper,
+                    modifier = Modifier.size((20f * scale).dp),
+                )
+            }
+            KaraokeControlCircle(
+                selected = selectedControl == 1,
+                active = true,
+                paper = paper,
+                scale = scale,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Done",
+                    tint = if (selectedControl == 1) Color(0xFF15171B) else paper,
+                    modifier = Modifier.size((20f * scale).dp),
+                )
+            }
+        }
+        Spacer(Modifier.height((10f * scale).dp))
+        Text(
+            text = "UP / DOWN  VOCALS\nLEFT / RIGHT  SELECT",
+            color = paper.copy(alpha = 0.54f),
+            fontSize = (7.2f * scale).sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            lineHeight = (10.5f * scale).sp,
+        )
+    }
+}
+
+@Composable
+private fun KaraokeControlCircle(
+    selected: Boolean,
+    active: Boolean,
+    paper: Color,
+    scale: Float,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size((39f * scale).dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    selected -> paper
+                    active -> paper.copy(alpha = 0.2f)
+                    else -> Color.Black.copy(alpha = 0.18f)
+                }
+            )
+            .border(
+                if (selected) (1.8f * scale).dp else (0.8f * scale).dp,
+                if (selected) paper.copy(alpha = 0.75f) else paper.copy(alpha = 0.22f),
+                CircleShape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 
@@ -1164,30 +1708,56 @@ private fun LoopingMotionArtwork(
         animationSpec = tween(420),
         label = "motionArtworkReveal",
     )
+    val presentationPhase = remember(url) { Animatable(0f) }
+    LaunchedEffect(url, playing) {
+        if (!playing) return@LaunchedEffect
+        while (isActive) {
+            val remaining = (1f - presentationPhase.value).coerceIn(0.001f, 1f)
+            presentationPhase.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = (18_000f * remaining).roundToInt(),
+                    easing = LinearEasing,
+                ),
+            )
+            presentationPhase.snapTo(0f)
+        }
+    }
     val player = remember(url) {
-        // Motion art is decorative. Its HLS buffer should never compete with
-        // audio/lyrics or consume a large share of a 2 GB TV's memory.
+        // Keep enough HLS data ready for a 60 fps rendition without allowing
+        // decorative motion art to dominate memory on a 2 GB television.
         val compactLoadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 2_500,
-                /* maxBufferMs = */ 10_000,
-                /* bufferForPlaybackMs = */ 500,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_200,
+                /* minBufferMs = */ 10_000,
+                /* maxBufferMs = */ 30_000,
+                /* bufferForPlaybackMs = */ 750,
+                /* bufferForPlaybackAfterRebufferMs = */ 3_000,
             )
-            .setTargetBufferBytes(6 * 1024 * 1024)
+            .setTargetBufferBytes(12 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
         val compactTrackSelector = DefaultTrackSelector(context).apply {
             setParameters(
                 buildUponParameters()
-                    // The artwork is displayed below this size on a 1080p TV;
-                    // a 720px rendition avoids wasting decoder bandwidth.
+                    // Prefer a 50–60 fps HLS variant when the source publishes
+                    // one. If it only has 24/30 fps, Media3 safely falls back.
+                    .setMinVideoFrameRate(50)
+                    .setMaxVideoFrameRate(60)
                     .setMaxVideoSize(720, 720)
+                    .setMaxVideoBitrate(6_000_000)
             )
         }
+        val renderers = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setAllowedVideoJoiningTimeMs(1_500)
         ExoPlayer.Builder(context)
+            .setRenderersFactory(renderers)
+            .setMediaSourceFactory(MotionArtworkCache.mediaSourceFactory(context))
             .setLoadControl(compactLoadControl)
             .setTrackSelector(compactTrackSelector)
+            // Keep the app's 60 Hz presentation instead of switching the
+            // television into a 24/30 Hz mode for a decorative square video.
+            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
             .build()
             .apply {
             volume = 0f
@@ -1233,7 +1803,19 @@ private fun LoopingMotionArtwork(
                 // Rebinding the TextureView on every Compose update can reset
                 // the decoder surface and produce visible micro-stutters.
                 update = {},
-                modifier = modifier.alpha(videoAlpha),
+                modifier = modifier
+                    .alpha(videoAlpha)
+                    // This tiny GPU-only drift is sampled at display VSYNC.
+                    // It keeps motion perceptually continuous at 60/120 Hz
+                    // even when the supplied movie contains only 24/30 fps.
+                    .graphicsLayer {
+                        val angle = presentationPhase.value * (2f * PI.toFloat())
+                        val breathe = 0.004f * sin(angle * 0.72f)
+                        scaleX = 1.014f + breathe
+                        scaleY = 1.014f + breathe
+                        translationX = 2.6f * density * cos(angle)
+                        translationY = 2.1f * density * sin(angle * 0.84f)
+                    },
             )
         }
     }
@@ -1357,7 +1939,12 @@ private fun ScrollableSyncedLyrics(
     val timeline = remember(lines, durationMs, writerCredit) {
         buildLyricsTimeline(lines, durationMs, writerCredit)
     }
-    val activeTimelineIndex = timeline.indexOfLast { it.startMs <= positionMs }
+    // Move the rail a fraction before the next onset, while the karaoke fill
+    // continues to use the unmodified audible clock. This avoids a late jump
+    // exactly on the first sung syllable.
+    val activeTimelineIndex = timeline.indexOfLast {
+        it.startMs <= positionMs + LYRIC_RAIL_LOOKAHEAD_MS
+    }
     var browsing by remember(lines) { mutableStateOf(false) }
     // Keep all rows mounted so the next lyric can travel into the live
     // position. Rows outside the current/next window only fade visually.
@@ -1500,6 +2087,8 @@ private fun lyricEdgeBlurFactor(
  */
 private const val INSTRUMENTAL_GAP_MINIMUM_MS = 7_000L
 private const val LYRIC_GAP_VISUAL_DELAY_MS = 520L
+private const val LYRIC_RAIL_LOOKAHEAD_MS = 140L
+private const val DOTS_FULL_BRIGHTNESS_HOLD_MS = 90L
 
 private data class LyricsTimelineEntry(
     val key: String,
@@ -1535,7 +2124,7 @@ private fun buildLyricsTimeline(
     }
 
     val voicedLines = mergeStandaloneParentheticalLines(
-        lines.filter { it.text.isNotBlank() }
+        lines.filter { it.combinedDisplayText().isNotBlank() }
     )
     // A long instrumental introduction gets the same progressive cue as an
     // interlude, while the end of a song remains intentionally quiet.
@@ -1571,7 +2160,9 @@ private fun buildLyricsTimeline(
 
 private fun lyricAudibleEndMs(line: LyricLine): Long {
     if (line.exactWordTiming) {
-        val lastWordEnd = line.words.maxOfOrNull { it.endMs } ?: line.timeMs
+        val lastWordEnd = (line.words + line.backgroundWords)
+            .maxOfOrNull { it.endMs }
+            ?: line.timeMs
         // Some providers give a line duration that extends beyond their last
         // word marker. Respect that tail so an instrumental cue cannot cover
         // a visibly unfinished lyric.
@@ -1580,14 +2171,16 @@ private fun lyricAudibleEndMs(line: LyricLine): Long {
     line.endMs?.takeIf { it > line.timeMs }?.let { return it }
     // Untimed/LRC text should err on the side of retaining the lyric longer;
     // an early gap cue is far more distracting than a slightly later one.
-    val estimatedDurationMs = (line.words.size.coerceAtLeast(1) * 620L)
+    val estimatedDurationMs = (
+        (line.words.size + line.backgroundWords.size).coerceAtLeast(1) * 620L
+        )
         .coerceIn(1_900L, 9_000L)
     return line.timeMs + estimatedDurationMs
 }
 
-private enum class LyricAsidePlacement { ABOVE, BELOW }
+internal enum class LyricAsidePlacement { ABOVE, BELOW }
 
-private data class LyricDisplayParts(
+internal data class LyricDisplayParts(
     val mainText: String,
     val mainWords: List<io.github.jqssun.airplay.lyrics.LyricWord>,
     val asideText: String? = null,
@@ -1596,7 +2189,10 @@ private data class LyricDisplayParts(
 )
 
 private const val STANDALONE_ASIDE_ATTACH_WINDOW_MS = 1_800L
-private val parentheticalLyricPattern = Regex("[（(]([^（）()]*)[）)]")
+private val parentheticalLyricPattern = Regex(
+    "[（(]([^（）()]*)[）)](?:\\s*([x×]\\s*\\d+))?",
+    RegexOption.IGNORE_CASE,
+)
 private val standaloneParentheticalPattern = Regex(
     "^\\s*[（(].+[）)]\\s*(?:[x×]\\s*\\d+)?\\s*$",
     RegexOption.IGNORE_CASE,
@@ -1604,10 +2200,10 @@ private val standaloneParentheticalPattern = Regex(
 private val parentheticalMarkPattern = Regex("[（）()]")
 
 /**
- * Providers such as NetEase commonly send backing vocals as their own YRC
- * row, for example `（And watches everything）`. Attach a row like that to
- * the lyric immediately before it when their timing touches, or to the next
- * lyric as an above-line aside when it arrives independently.
+ * Apple lyric data can expose a backing vocal as a separate parenthesized row,
+ * for example `（And watches everything）`. Attach a row like that to the lyric
+ * immediately before it when their timing touches, or to the next lyric as an
+ * above-line aside when it arrives independently.
  */
 internal fun mergeStandaloneParentheticalLines(lines: List<LyricLine>): List<LyricLine> {
     if (lines.isEmpty()) return emptyList()
@@ -1641,42 +2237,73 @@ internal fun mergeStandaloneParentheticalLines(lines: List<LyricLine>): List<Lyr
 }
 
 private fun mergeLyricDisplayLines(first: LyricLine, second: LyricLine): LyricLine {
-    val words = first.words + second.words
     val firstIsAside = standaloneParentheticalPattern.matches(first.text)
-    return LyricLine(
+    val main = if (firstIsAside) second else first
+    val backing = if (firstIsAside) first else second
+    val cleanedBackingText = backing.text
+        .replace(parentheticalMarkPattern, "")
+        .trim()
+    val backgroundText = listOf(main.backgroundText, cleanedBackingText)
+        .filter(String::isNotBlank)
+        .joinToString(" ")
+    return main.copy(
         timeMs = minOf(first.timeMs, second.timeMs),
-        text = "${first.text.trimEnd()} ${second.text.trimStart()}",
-        words = words,
-        exactWordTiming = first.exactWordTiming && second.exactWordTiming && words.isNotEmpty(),
+        backgroundText = backgroundText,
+        backgroundWords = main.backgroundWords + backing.words,
+        exactWordTiming = main.exactWordTiming || backing.exactWordTiming,
+        asideWordRange = null,
         endMs = maxOf(lyricAudibleEndMs(first), lyricAudibleEndMs(second)),
-        alignment = if (firstIsAside) second.alignment else first.alignment,
+        alignment = main.alignment,
     )
 }
 
-private fun splitLyricDisplayParts(line: LyricLine): LyricDisplayParts {
+internal fun splitLyricDisplayParts(line: LyricLine): LyricDisplayParts {
+    if (line.backgroundText.isNotBlank()) {
+        val mainStart = line.words.firstOrNull()?.startMs ?: line.timeMs
+        val backgroundStart = line.backgroundWords.firstOrNull()?.startMs ?: line.timeMs
+        return LyricDisplayParts(
+            mainText = line.text,
+            mainWords = line.words,
+            asideText = line.backgroundText,
+            asideWords = line.backgroundWords,
+            asidePlacement = if (
+                line.text.isBlank() ||
+                backgroundStart + BACKGROUND_VOCAL_LEAD_THRESHOLD_MS < mainStart
+            ) {
+                LyricAsidePlacement.ABOVE
+            } else {
+                LyricAsidePlacement.BELOW
+            },
+        )
+    }
     val matches = parentheticalLyricPattern.findAll(line.text).toList()
     if (matches.isEmpty()) return LyricDisplayParts(line.text, line.words)
 
-    val asideText = matches.joinToString(" ") { it.groupValues[1].trim() }
+    val asideText = matches.joinToString(" ") { match ->
+        val vocal = match.groupValues[1].trim()
+        val repeat = match.groupValues.getOrNull(2)
+            .orEmpty()
+            .replace(Regex("\\s+"), "")
+            .replace('x', '×', ignoreCase = true)
+        listOf(vocal, repeat).filter { it.isNotBlank() }.joinToString(" ")
+    }
         .replace(Regex("\\s+"), " ")
         .trim()
     val mainText = parentheticalLyricPattern.replace(line.text, " ")
         .replace(Regex("\\s+"), " ")
         .trim()
-    // A line made entirely of a parenthetical is still a normal lyric line;
-    // only use the compact treatment when it accompanies main lyrics.
-    if (asideText.isBlank() || mainText.isBlank()) return LyricDisplayParts(line.text, line.words)
+    if (asideText.isBlank()) return LyricDisplayParts(line.text, line.words)
 
     var searchStart = 0
     val asideRanges = matches.map { it.range }
     val mainWords = mutableListOf<io.github.jqssun.airplay.lyrics.LyricWord>()
     val asideWords = mutableListOf<io.github.jqssun.airplay.lyrics.LyricWord>()
-    line.words.forEach { word ->
+    line.words.forEachIndexed { wordIndex, word ->
         val matchStart = line.text.indexOf(word.text, startIndex = searchStart, ignoreCase = true)
         val wordStart = if (matchStart >= 0) matchStart else searchStart
         val wordEnd = (wordStart + word.text.length).coerceAtMost(line.text.length)
         searchStart = wordEnd
-        val isAside = asideRanges.any { range ->
+        val isAside = line.asideWordRange?.contains(wordIndex) ?: asideRanges.any { range ->
             wordStart < range.last + 1 && wordEnd > range.first
         }
         if (isAside) {
@@ -1692,13 +2319,17 @@ private fun splitLyricDisplayParts(line: LyricLine): LyricDisplayParts {
         mainWords = mainWords,
         asideText = asideText,
         asideWords = asideWords,
-        asidePlacement = if (matches.first().range.first == 0) {
+        asidePlacement = if (
+            line.text.substring(0, matches.first().range.first).isBlank()
+        ) {
             LyricAsidePlacement.ABOVE
         } else {
             LyricAsidePlacement.BELOW
         },
     )
 }
+
+private const val BACKGROUND_VOCAL_LEAD_THRESHOLD_MS = 240L
 
 @Composable
 private fun ScrollableLyricLine(
@@ -1717,34 +2348,47 @@ private fun ScrollableLyricLine(
 ) {
     val displayParts = remember(line) { splitLyricDisplayParts(line) }
     val isActive = lineIndex == activeIndex
+    val mainWordByWord = line.exactWordTiming &&
+        lyricWordsMatchLine(displayParts.mainText, displayParts.mainWords)
+    val asideWordByWord = line.exactWordTiming &&
+        displayParts.asideText?.let { aside ->
+            lyricWordsMatchLine(aside, displayParts.asideWords)
+        } == true
     val isTrailing = line.alignment == LyricAlignment.TRAILING
     val textAlign = if (isTrailing) TextAlign.End else TextAlign.Start
     val distance = abs(lineIndex - activeIndex)
     val emphasis by animateFloatAsState(
         targetValue = when {
             isActive -> 1f
-            isUpcoming -> 0.68f
-            browsing -> 0.82f
-            distance == 1 -> 0.64f
-            distance == 2 -> 0.44f
-            else -> 0.25f
+            isUpcoming -> 0.38f
+            browsing -> 0.78f
+            distance == 1 -> 0.34f
+            distance == 2 -> 0.25f
+            else -> 0.18f
         },
-        animationSpec = tween(260, easing = FastOutSlowInEasing),
+        animationSpec = spring(
+            dampingRatio = 1f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
         label = "lyricLineEmphasis",
     )
     val sizeScale by animateFloatAsState(
         targetValue = when {
             isActive -> 1f
-            isUpcoming -> 0.9f
-            browsing -> 0.92f
-            else -> 0.82f
+            isUpcoming -> 0.98f
+            browsing -> 0.98f
+            else -> 0.96f
         },
-        animationSpec = tween(300, easing = FastOutSlowInEasing),
+        animationSpec = spring(
+            dampingRatio = 1f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
         label = "lyricLineScale",
     )
     val logicalBlur = when {
+        isOutsideLiveWindow && !browsing -> 0f
         browsing || isActive -> 0f
-        isUpcoming -> 2.2f
+        isUpcoming -> 1.9f
         distance == 1 -> 1.1f
         distance == 2 -> 2.8f
         distance == 3 -> 4.8f
@@ -1795,31 +2439,34 @@ private fun ScrollableLyricLine(
                     paper = paper,
                     scale = scale,
                     alignment = line.alignment,
+                    wordByWord = asideWordByWord,
                 )
             }
 
-            if (isActive) {
-                ProgressiveWordLine(
-                    text = displayParts.mainText,
-                    words = displayParts.mainWords,
-                    positionMs = positionMs,
-                    accent = accent,
-                    paper = paper,
-                    scale = scale,
-                    textAlign = textAlign,
-                )
-            } else {
-                Text(
-                    displayParts.mainText.ifBlank { "♪" },
-                    color = paper,
-                    fontSize = (46f * scale).sp,
-                    lineHeight = (56f * scale).sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = textAlign,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            if (displayParts.mainText.isNotBlank()) {
+                if (isActive && mainWordByWord) {
+                    ProgressiveWordLine(
+                        text = displayParts.mainText,
+                        words = displayParts.mainWords,
+                        positionMs = positionMs,
+                        accent = accent,
+                        paper = paper,
+                        scale = scale,
+                        textAlign = textAlign,
+                    )
+                } else {
+                    Text(
+                        displayParts.mainText,
+                        color = paper,
+                        fontSize = ((if (isActive) 50f else 46f) * scale).sp,
+                        lineHeight = ((if (isActive) 60f else 56f) * scale).sp,
+                        fontWeight = if (isActive) FontWeight.Black else FontWeight.Bold,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = textAlign,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
 
             if (displayParts.asidePlacement == LyricAsidePlacement.BELOW) {
@@ -1831,6 +2478,7 @@ private fun ScrollableLyricLine(
                     paper = paper,
                     scale = scale,
                     alignment = line.alignment,
+                    wordByWord = asideWordByWord,
                 )
             }
         }
@@ -1846,13 +2494,14 @@ private fun ParentheticalLyric(
     paper: Color,
     scale: Float,
     alignment: LyricAlignment,
+    wordByWord: Boolean,
 ) {
     val aside = parts.asideText ?: return
     val textAlign = if (alignment == LyricAlignment.TRAILING) TextAlign.End else TextAlign.Start
     if (parts.asidePlacement == LyricAsidePlacement.BELOW) {
         Spacer(Modifier.height((9f * scale).dp))
     }
-    if (active) {
+    if (active && wordByWord) {
         ProgressiveWordLine(
             text = aside,
             words = parts.asideWords,
@@ -1865,11 +2514,14 @@ private fun ParentheticalLyric(
             fontWeight = FontWeight.Bold,
             maxLines = 2,
             textAlign = textAlign,
+            activeAlpha = 0.48f,
+            futureAlpha = 0.18f,
+            auraMultiplier = 0.58f,
         )
     } else {
         Text(
             text = aside,
-            color = paper,
+            color = paper.copy(alpha = if (active) 0.48f else 0.35f),
             fontSize = (26f * scale).sp,
             lineHeight = (33f * scale).sp,
             fontWeight = FontWeight.Bold,
@@ -1914,20 +2566,26 @@ private fun LyricsWriterCredit(
         }
     }
 
-    Text(
-        text = styledCredit,
-        color = paper,
-        fontSize = (28f * scale).sp,
-        lineHeight = (37f * scale).sp,
-        maxLines = 4,
-        overflow = TextOverflow.Ellipsis,
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = visibility * (1f - edgeBlur * 0.26f) }
             .then(
                 if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
             ),
-    )
+    ) {
+        // Preserve the open space used by Apple Music between the final lyric
+        // and its Composition & Lyrics credit.
+        Spacer(Modifier.height((42f * scale).dp))
+        Text(
+            text = styledCredit,
+            color = paper,
+            fontSize = (29f * scale).sp,
+            lineHeight = (39f * scale).sp,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable
@@ -1962,12 +2620,6 @@ private fun LyricsGapIndicator(
         animationSpec = tween(220, easing = FastOutSlowInEasing),
         label = "lyricsGapBlur",
     )
-    val reachesNextLyric = isActive && endMs > positionMs && endMs - positionMs <= 300L
-    val arrivalFade by animateFloatAsState(
-        targetValue = if (reachesNextLyric) 0f else 1f,
-        animationSpec = tween(260, easing = FastOutSlowInEasing),
-        label = "lyricsGapArrivalFade",
-    )
     val liveWindowAlpha by animateFloatAsState(
         targetValue = if (isOutsideLiveWindow) 0f else 1f,
         animationSpec = tween(340, easing = FastOutSlowInEasing),
@@ -1997,7 +2649,7 @@ private fun LyricsGapIndicator(
             .fillMaxWidth()
             .height((64f * scale).dp)
             .graphicsLayer {
-                alpha = emphasis * arrivalFade * liveWindowAlpha * (1f - edgeBlur * 0.34f)
+                alpha = emphasis * liveWindowAlpha * (1f - edgeBlur * 0.34f)
             }
             .then(
                 if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
@@ -2009,11 +2661,15 @@ private fun LyricsGapIndicator(
                 .size((96f * scale).dp, (34f * scale).dp)
         ) {
             repeat(3) { index ->
-                // The cue illuminates left-to-right at the beginning of a
-                // long break, then rests with a very small shared breath.
+                // The dots fill in three consecutive stages across the break.
+                // All three are fully bright for the final few display frames
+                // before the sung line takes over.
                 val activation = stagedDotProgress(elapsedMs, gapDurationMs, index)
                 val breath = if (playing && isActive && activation > 0.96f) dotBreath else 1f
-                val alpha = (0.2f + activation * 0.8f) * breath * entrance
+                // Keep breathing in the radius only. Multiplying alpha by the
+                // breath phase made a completed dot look dim at hand-off.
+                val alpha = ((0.16f + activation * 0.84f) * entrance)
+                    .coerceIn(0f, 1f)
                 val radius = size.height * (0.23f + activation * 0.16f) * breath
                 drawCircle(
                     color = paper.copy(alpha = alpha),
@@ -2028,13 +2684,22 @@ private fun LyricsGapIndicator(
     }
 }
 
-private fun stagedDotProgress(elapsedMs: Long, gapDurationMs: Long, index: Int): Float {
-    // Let all three dots arrive progressively over the first ~62% of a long
-    // instrumental, leaving a calm fully-lit beat before the lyric returns.
-    val stagingWindowMs = (gapDurationMs * 0.62f).toLong().coerceIn(3_500L, 7_000L)
-    val startMs = stagingWindowMs * index / 3L
-    val fadeMs = (stagingWindowMs / 5L).coerceIn(500L, 900L)
-    val progress = ((elapsedMs - startMs).toFloat() / fadeMs).coerceIn(0f, 1f)
+internal fun stagedDotProgress(elapsedMs: Long, gapDurationMs: Long, index: Int): Float {
+    val safeIndex = index.coerceIn(0, 2)
+    val duration = gapDurationMs.coerceAtLeast(INSTRUMENTAL_GAP_MINIMUM_MS)
+    val fullBrightnessAtMs = (
+        duration - LYRIC_RAIL_LOOKAHEAD_MS - DOTS_FULL_BRIGHTNESS_HOLD_MS
+    ).coerceAtLeast(1_000L)
+    val stageDurationMs = (fullBrightnessAtMs / 3L).coerceAtLeast(1L)
+    val startMs = stageDurationMs * safeIndex
+    val endMs = if (safeIndex == 2) {
+        fullBrightnessAtMs
+    } else {
+        stageDurationMs * (safeIndex + 1L)
+    }
+    val progress = (
+        (elapsedMs - startMs).toFloat() / (endMs - startMs).coerceAtLeast(1L)
+        ).coerceIn(0f, 1f)
     return FastOutSlowInEasing.transform(progress)
 }
 
@@ -2228,7 +2893,6 @@ private fun PlainLyrics(
         }
         if (writerCredit.isNotBlank()) {
             item(key = "writer-credit") {
-                Spacer(Modifier.height((32f * scale).dp))
                 LyricsWriterCredit(
                     writerCredit = writerCredit,
                     paper = paper,
@@ -2252,12 +2916,14 @@ private suspend fun LazyListState.animateLineToCenter(index: Int) {
     val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
     val itemCenter = item.offset + (item.size / 2)
     val delta = itemCenter - viewportCenter
-    if (abs(delta) > 1) {
+    if (abs(delta) > 2) {
         animateScrollBy(
             value = delta.toFloat(),
             animationSpec = spring(
-                dampingRatio = 0.9f,
-                stiffness = Spring.StiffnessMedium,
+                // Critically damped motion reaches the new live row without
+                // the tiny rebound that reads as lyric-line vibration on TV.
+                dampingRatio = 1f,
+                stiffness = Spring.StiffnessMediumLow,
             ),
         )
     }
@@ -2276,89 +2942,169 @@ private fun ProgressiveWordLine(
     fontWeight: FontWeight = FontWeight.Black,
     maxLines: Int = 3,
     textAlign: TextAlign = TextAlign.Start,
+    activeAlpha: Float = 0.94f,
+    futureAlpha: Float = 0.18f,
+    auraMultiplier: Float = 1f,
 ) {
-    // A partial word timeline must never hide text supplied by the lyric
-    // provider. It is better to show a complete, non-karaoke line than a
-    // beautifully timed line with missing words.
+    // Only Apple-supplied complete word timing enters this renderer. A
+    // line-synced Apple row is rendered as one active line by the caller.
     val renderWords = remember(text, words) {
         words.takeIf { lyricWordsMatchLine(text, it) }.orEmpty()
     }
-    val highlighted = remember(text, renderWords, positionMs, accent, paper, scale) {
+    val renderedText = remember(text, renderWords) {
+        renderWords.takeIf { it.isNotEmpty() }
+            ?.joinToString(separator = "") { it.text }
+            ?: text.ifBlank { "♪" }
+    }
+    val activeIndex = renderWords.indexOfLast { word ->
+        positionMs >= word.startMs && positionMs < word.endMs
+    }
+    val activeWord = renderWords.getOrNull(activeIndex)
+    val activeProgress = activeWord?.let { lyricWordProgress(it, positionMs) } ?: 0f
+    val activeDurationMs = activeWord?.let { (it.endMs - it.startMs).coerceAtLeast(1L) } ?: 1L
+    val activeSlice = activeWord?.let { progressiveTextSlice(it.text, activeProgress) }
+    val activeBlend = activeSlice?.let {
+        AppleLyricEasing.transform(it.blendFraction)
+    } ?: 0f
+    val activeHeadPulse = if (activeDurationMs < 360L) {
+        lyricHighlightGlyphPulse(AppleLyricEasing.transform(activeProgress))
+    } else {
+        lyricHighlightGlyphPulse(activeBlend)
+    }
+    val activeSustainedAura = lyricSustainedWordAura(activeProgress, activeDurationMs)
+    val activeGlyphScale = lyricHighlightGlyphScale(activeProgress, activeDurationMs)
+    val activeAuraStrength = (
+        maxOf(activeHeadPulse, activeSustainedAura * 0.78f) * auraMultiplier
+        ).coerceIn(0f, 1f)
+    val density = LocalDensity.current
+    val auraBlurPx = with(density) { (5f * scale).dp.toPx() }
+    val activeWordStart = if (activeIndex > 0) {
+        renderWords.take(activeIndex).sumOf { it.text.length }
+    } else {
+        0
+    }
+    val activeGraphemeRange = activeWord?.let {
+        lyricHighlightGraphemeRange(
+            wordText = it.text,
+            wordStartOffset = activeWordStart,
+            progress = activeProgress,
+        )
+    }
+    var textLayout by remember(renderedText, fontSize, lineHeight, scale) {
+        mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null)
+    }
+    val highlighted = remember(
+        text,
+        renderWords,
+        positionMs,
+        accent,
+        paper,
+        scale,
+        activeAlpha,
+        futureAlpha,
+        auraMultiplier,
+    ) {
         buildAnnotatedString {
             if (renderWords.isEmpty()) {
                 append(text.ifBlank { "♪" })
-            } else {
-                val future = paper.copy(alpha = 0.28f)
-                val aura = mix(accent, Color.White, 0.34f)
-                renderWords.forEach { word ->
-                    val progress = lyricWordProgress(word, positionMs)
-                    val wordFade = FastOutSlowInEasing.transform(progress)
-                    val slice = progressiveTextSlice(word.text, progress)
-                    val activeFade = FastOutSlowInEasing.transform(slice.blendFraction)
-                    val isCurrentWord = progress > 0f && progress < 1f
-                    val auraStrength = if (isCurrentWord) {
-                        0.58f + 0.42f * sin(progress * PI.toFloat())
-                    } else {
-                        0f
-                    }
+                return@buildAnnotatedString
+            }
 
-                    fun appendKaraokeSpan(
-                        value: String,
-                        color: Color,
-                        glow: Float = 0f,
-                    ) {
-                        if (value.isEmpty()) return
-                        withStyle(
-                            SpanStyle(
-                                color = color,
-                                shadow = if (glow > 0f) {
-                                    Shadow(
-                                        aura.copy(alpha = 0.52f * glow),
-                                        blurRadius = 13f * scale,
-                                    )
-                                } else {
-                                    null
-                                },
-                            )
-                        ) { append(value) }
-                    }
+            val activeColor = paper.copy(alpha = activeAlpha)
+            val future = paper.copy(alpha = futureAlpha)
+            val firstFutureIndex = renderWords.indexOfFirst { positionMs <= it.startMs }
+                .takeIf { it >= 0 }
+                ?: renderWords.size
+            val splitIndex = if (activeIndex >= 0) activeIndex else firstFutureIndex
 
-                    // Very short words do not have enough time for a readable
-                    // character sweep; fading the word as one unit prevents a
-                    // rapid flicker. Longer words retain the grapheme-safe
-                    // karaoke fill below.
-                    if (word.endMs - word.startMs < 360L) {
-                        appendKaraokeSpan(
-                            value = word.text,
-                            color = mix(future, paper, wordFade),
-                            glow = auraStrength,
-                        )
-                        return@forEach
-                    }
-
-                    // Fill every grapheme cluster instead of flipping a whole
-                    // word at once. `progressiveTextSlice` keeps Thai marks
-                    // and emoji intact while the fill follows the vocal. A
-                    // subtle pre-light on following characters prevents hard
-                    // visual steps between each cluster.
-                    appendKaraokeSpan(
-                        value = word.text.substring(0, slice.solidEnd),
-                        color = paper,
-                        glow = auraStrength * 0.72f,
-                    )
-                    appendKaraokeSpan(
-                        value = word.text.substring(slice.solidEnd, slice.blendEnd),
-                        color = mix(future, paper, activeFade),
-                        glow = maxOf(activeFade, auraStrength),
-                    )
-                    appendKaraokeSpan(
-                        value = word.text.substring(slice.blendEnd),
-                        color = mix(future, paper, wordFade * 0.12f),
-                    )
+            if (splitIndex > 0) {
+                withStyle(SpanStyle(color = activeColor)) {
+                    append(renderWords.subList(0, splitIndex).joinToString("") { it.text })
                 }
+            }
+
+            if (activeIndex < 0) {
+                if (splitIndex < renderWords.size) {
+                    withStyle(SpanStyle(color = future)) {
+                        append(renderWords.subList(splitIndex, renderWords.size)
+                            .joinToString("") { it.text })
+                    }
+                }
+                return@buildAnnotatedString
+            }
+
+            val word = renderWords[activeIndex]
+            val progress = activeProgress
+            val wordFade = AppleLyricEasing.transform(progress)
+            val slice = activeSlice ?: progressiveTextSlice(word.text, progress)
+            val activeFade = activeBlend
+            val durationMs = activeDurationMs
+
+            fun appendKaraokeSpan(
+                value: String,
+                color: Color,
+            ) {
+                if (value.isEmpty()) return
+                withStyle(SpanStyle(color = color)) {
+                    append(value)
+                }
+            }
+
+            if (durationMs < 360L) {
+                appendKaraokeSpan(
+                    value = word.text,
+                    color = mix(future, activeColor, wordFade),
+                )
+            } else {
+                appendKaraokeSpan(
+                    value = word.text.substring(0, slice.solidEnd),
+                    color = activeColor,
+                )
+                appendKaraokeSpan(
+                    value = word.text.substring(slice.solidEnd, slice.blendEnd),
+                    color = mix(future, activeColor, activeFade),
+                )
+                appendKaraokeSpan(
+                    value = word.text.substring(slice.blendEnd),
+                    color = future,
+                )
+            }
+
+            if (activeIndex + 1 < renderWords.size) {
+                withStyle(SpanStyle(color = future)) {
+                    append(renderWords.subList(activeIndex + 1, renderWords.size)
+                        .joinToString("") { it.text })
+                }
+            }
+
+            val glowRange = activeGraphemeRange
+            if (
+                glowRange != null &&
+                activeAuraStrength > 0.01f &&
+                glowRange.start >= 0 &&
+                glowRange.endExclusive <= length &&
+                glowRange.endExclusive > glowRange.start
+            ) {
+                // Paint a glyph shadow, not a selection-path fill. This keeps
+                // the aura wrapped around letter shapes without ever producing
+                // a rectangular karaoke block.
+                addStyle(
+                    SpanStyle(
+                        shadow = Shadow(
+                            color = mix(accent, Color.White, 0.78f).copy(
+                                alpha = 0.62f * activeAuraStrength
+                            ),
+                            offset = androidx.compose.ui.geometry.Offset.Zero,
+                            blurRadius = auraBlurPx * (0.82f + activeSustainedAura * 0.42f),
+                        )
+                    ),
+                    start = glowRange.start,
+                    end = glowRange.endExclusive,
+                )
             }
         }
     }
+
     Text(
         text = highlighted,
         color = paper,
@@ -2368,7 +3114,47 @@ private fun ProgressiveWordLine(
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         textAlign = textAlign,
-        modifier = Modifier.fillMaxWidth(),
+        onTextLayout = { textLayout = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawWithContent {
+                val contentScope = this
+                drawContent()
+                val layout = textLayout
+                val range = activeGraphemeRange
+                if (
+                    layout != null &&
+                    range != null &&
+                    range.start >= 0 &&
+                    range.endExclusive <= layout.layoutInput.text.length &&
+                    range.endExclusive > range.start
+                ) {
+                    if (activeGlyphScale > 1.001f) {
+                        val glyphPath = layout.getPathForRange(
+                            range.start,
+                            range.endExclusive,
+                        )
+                        val bounds = glyphPath.getBounds()
+                        if (bounds.width > 0f && bounds.height > 0f) {
+                            // Repaint only the active glyph through its outline.
+                            // The measured paragraph never changes, so a 14%
+                            // breath cannot make neighbouring words or the line
+                            // itself shake.
+                            withTransform({
+                                this.scale(
+                                    scaleX = activeGlyphScale,
+                                    scaleY = activeGlyphScale,
+                                    pivot = bounds.center,
+                                )
+                            }) {
+                                clipPath(glyphPath) {
+                                    contentScope.drawContent()
+                                }
+                            }
+                        }
+                    }
+                }
+            },
     )
 }
 
@@ -2421,13 +3207,33 @@ private fun rememberDisplaySyncedPosition(
             renderedPosition = latestFallback
             return@LaunchedEffect
         }
+        var lastFrameNanos = 0L
+        var lastSampleNanos = 0L
+        var sampledPositionMs = latestFallback
         while (isActive) {
-            withFrameNanos {
-                val sample = viewModel.sampleAudioPositionMs().takeIf { it >= 0L }
-                    ?: latestFallback
-                if (renderedPosition != sample) {
-                    renderedPosition = sample
+            withFrameNanos { frameNanos ->
+                if (
+                    lastSampleNanos == 0L ||
+                    frameNanos - lastSampleNanos >= LYRIC_CLOCK_SAMPLE_INTERVAL_NS
+                ) {
+                    sampledPositionMs = viewModel.sampleAudioPositionMs()
+                        .takeIf { it >= 0L }
+                        ?: latestFallback
+                    lastSampleNanos = frameNanos
                 }
+                if (lastFrameNanos == 0L) {
+                    renderedPosition = sampledPositionMs
+                } else {
+                    val frameDeltaMs = (frameNanos - lastFrameNanos) / 1_000_000L
+                    val extrapolatedSample = sampledPositionMs +
+                        ((frameNanos - lastSampleNanos) / 1_000_000L)
+                    renderedPosition = smoothLyricDisplayPosition(
+                        previousMs = renderedPosition,
+                        sampledMs = extrapolatedSample,
+                        frameDeltaMs = frameDeltaMs,
+                    )
+                }
+                lastFrameNanos = frameNanos
             }
         }
     }

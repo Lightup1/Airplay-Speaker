@@ -1,9 +1,15 @@
 package io.github.jqssun.airplay.lyrics
 
 import java.text.BreakIterator
+import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 internal data class ProgressiveTextSlice(
     val solidEnd: Int,
@@ -41,6 +47,102 @@ internal fun lyricWordProgress(word: LyricWord, positionMs: Long): Float {
 }
 
 /**
+ * Advances the display clock monotonically while gently following the latest
+ * audible-output sample. AudioTrack queue measurements arrive in small steps;
+ * feeding those steps directly to karaoke makes the highlight hesitate and
+ * jump. Real seeks and long missed frames still snap immediately.
+ */
+internal fun smoothLyricDisplayPosition(
+    previousMs: Long,
+    sampledMs: Long,
+    frameDeltaMs: Long,
+): Long {
+    val sample = sampledMs.coerceAtLeast(0L)
+    if (previousMs < 0L || frameDeltaMs > 120L) return sample
+    val delta = frameDeltaMs.coerceIn(1L, 80L)
+    val predicted = previousMs + delta
+    val error = sample - predicted
+    if (abs(error) >= 850L) return sample
+
+    val maxCorrection = (delta * 0.45f).roundToLong().coerceAtLeast(2L)
+    val correction = (error * 0.12f).roundToLong()
+        .coerceIn(-maxCorrection, maxCorrection)
+    // During playback a changing output-queue estimate must never pull the
+    // visible lyric backwards. Slowing briefly is far less distracting.
+    return (predicted + correction).coerceAtLeast(previousMs + 1L)
+}
+
+/** A single grapheme grows and returns to rest as the fill passes through it. */
+internal fun lyricHighlightGlyphPulse(blendFraction: Float): Float {
+    val progress = blendFraction.coerceIn(0f, 1f)
+    return sin(progress * PI.toFloat()).coerceIn(0f, 1f)
+}
+
+/**
+ * A paint-only scale for the grapheme under the playhead. It never changes
+ * text measurement, so the live row can breathe without shaking or
+ * re-wrapping. Longer words receive a slightly wider, slower pulse.
+ */
+internal fun lyricHighlightGlyphScale(
+    progress: Float,
+    durationMs: Long,
+): Float {
+    if (progress <= 0f || progress >= 1f) return 1f
+    // Keep quick syllables steady. Sustained Apple-style words interpolate
+    // from no size change at one second to a 14% breath at two seconds.
+    val durationWeight = ((durationMs - 1_000L).toFloat() / 1_000f).coerceIn(0f, 1f)
+    val peakGrowth = durationWeight * 0.14f
+    return 1f + lyricHighlightGlyphPulse(progress) * peakGrowth
+}
+
+internal data class LyricHighlightGraphemeRange(
+    val start: Int,
+    val endExclusive: Int,
+)
+
+/**
+ * Locates the visible grapheme beneath the karaoke playhead. Separators added
+ * between Apple word tokens are intentionally excluded so the highlight
+ * cannot jump backwards or glow on an invisible trailing space.
+ */
+internal fun lyricHighlightGraphemeRange(
+    wordText: String,
+    wordStartOffset: Int,
+    progress: Float,
+): LyricHighlightGraphemeRange? {
+    if (wordText.isEmpty() || wordStartOffset < 0) return null
+    val boundaries = graphemeBoundaries(wordText)
+    var visibleClusters = (boundaries.size - 1).coerceAtLeast(0)
+    while (visibleClusters > 0) {
+        val start = boundaries[visibleClusters - 1]
+        val end = boundaries[visibleClusters]
+        if (wordText.substring(start, end).isNotBlank()) break
+        visibleClusters--
+    }
+    if (visibleClusters <= 0) return null
+    val clusterIndex = floor(visibleClusters * progress.coerceIn(0f, 0.999_999f))
+        .toInt()
+        .coerceIn(0, visibleClusters - 1)
+    return LyricHighlightGraphemeRange(
+        start = wordStartOffset + boundaries[clusterIndex],
+        endExclusive = wordStartOffset + boundaries[clusterIndex + 1],
+    )
+}
+
+/**
+ * Sustained words receive a soft, broad aura. Short syllables intentionally
+ * return zero so quick lyrics remain clean instead of flashing constantly.
+ */
+internal fun lyricSustainedWordAura(
+    progress: Float,
+    durationMs: Long,
+): Float {
+    if (durationMs < 760L || progress <= 0f || progress >= 1f) return 0f
+    val envelope = sin(progress.coerceIn(0f, 1f) * PI.toFloat()).coerceAtLeast(0f)
+    return sqrt(envelope)
+}
+
+/**
  * Word-timed providers occasionally omit an ad-lib, parenthetical or a whole
  * fragment of the displayed line. Rendering those tokens directly would make
  * the missing text disappear from the TV. Only use a word timeline when it
@@ -51,9 +153,12 @@ internal fun lyricWordsMatchLine(text: String, words: List<LyricWord>): Boolean 
     return normalizeLyricText(text) == normalizeLyricText(words.joinToString(separator = "") { it.text })
 }
 
-private fun normalizeLyricText(value: String): String = value
-    .filterNot(Char::isWhitespace)
-    .lowercase(Locale.ROOT)
+private fun normalizeLyricText(value: String): String {
+    val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
+        .lowercase(Locale.ROOT)
+    val searchable = normalized.filter { it.isLetterOrDigit() }
+    return searchable.ifBlank { normalized.filterNot(Char::isWhitespace) }
+}
 
 /**
  * Returns a grapheme-safe prefix boundary for progressive karaoke fill.
