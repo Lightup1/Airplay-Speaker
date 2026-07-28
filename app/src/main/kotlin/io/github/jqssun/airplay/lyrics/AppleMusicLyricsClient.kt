@@ -7,6 +7,9 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,23 +45,50 @@ class AppleMusicLyricsClient {
                 maxBytes = MAX_SEARCH_BYTES,
             ) ?: return@withContext null
             val trackId = selectTrackId(search, request) ?: return@withContext null
-            val response = requestText(
-                "$LYRICS_URL" + query("id" to trackId.toString(), "v" to "2"),
-                maxBytes = MAX_LYRICS_BYTES,
-            ) ?: return@withContext null
-            parseResponse(response, trackId)?.also { result ->
-                synchronized(cache) { cache[cacheKey] = result }
+            val result = coroutineScope {
+                val lyricsRequest = async {
+                    requestText(
+                        "$LYRICS_URL" + query("id" to trackId.toString(), "v" to "2"),
+                        maxBytes = MAX_LYRICS_BYTES,
+                    )
+                }
+                val creditRequest = async {
+                    withTimeoutOrNull(CREDITS_TIMEOUT_MS) {
+                        requestText(
+                            "$APPLE_MUSIC_SONG_URL/$trackId",
+                            maxBytes = MAX_APPLE_PAGE_BYTES,
+                            accept = "text/html,application/xhtml+xml",
+                            connectTimeoutMs = 2_500,
+                            readTimeoutMs = 3_200,
+                        )
+                    }
+                }
+                val response = lyricsRequest.await() ?: return@coroutineScope null
+                parseResponse(response, trackId)?.copy(
+                    writerCredit = creditRequest.await()
+                        ?.let(::parseWriterCredit)
+                        .orEmpty(),
+                )
+            }
+            result?.also { resolved ->
+                synchronized(cache) { cache[cacheKey] = resolved }
             }
         }.getOrNull()
     }
 
-    private fun requestText(url: String, maxBytes: Int): String? {
+    private fun requestText(
+        url: String,
+        maxBytes: Int,
+        accept: String = "application/json",
+        connectTimeoutMs: Int = 3_500,
+        readTimeoutMs: Int = 6_500,
+    ): String? {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 5_000
-            readTimeout = 14_000
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
             instanceFollowRedirects = true
-            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Accept", accept)
             setRequestProperty("Accept-Language", "th-TH,th;q=0.9,en;q=0.8")
             setRequestProperty("User-Agent", USER_AGENT)
         }
@@ -96,10 +126,14 @@ class AppleMusicLyricsClient {
     companion object {
         private const val ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
         private const val LYRICS_URL = "https://lyrics.paxsenix.org/apple-music/lyrics"
+        private const val APPLE_MUSIC_SONG_URL = "https://music.apple.com/th/song"
         private const val USER_AGENT =
-            "AirplaySpeaker/1.0.0 (https://github.com/jqssun/android-airplay-server)"
+            "AirplaySpeaker/2.0.0 (https://github.com/l3kza08/Sonic-Cast)"
         private const val MAX_SEARCH_BYTES = 1024 * 1024
         private const val MAX_LYRICS_BYTES = 768 * 1024
+        private const val MAX_APPLE_PAGE_BYTES = 768 * 1024
+        private const val CREDITS_TIMEOUT_MS = 3_800L
+        private const val MAX_CREDIT_SECTION_CHARS = 256 * 1024
         private const val CACHE_ENTRIES = 12
         private const val MAX_LINES = 750
         private const val MAX_WORDS_PER_LINE = 160
@@ -154,47 +188,82 @@ class AppleMusicLyricsClient {
 
         internal fun parseResponse(value: String, trackId: Long): LyricsState? {
             val root = runCatching { JSONObject(value) }.getOrNull() ?: return null
-            val rawLines = root.optJSONArray("lyrics") ?: return null
+            val rawLines = root.optJSONArray("lyrics")
+            if (rawLines == null) {
+                val plainLyrics = root.optString("lyrics").trim()
+                return plainLyrics.takeIf { it.isNotBlank() }?.let {
+                    LyricsState(
+                        status = LyricsStatus.PLAIN,
+                        plainLyrics = it,
+                        sourceId = trackId,
+                        wordSyncMode = WordSyncMode.NONE,
+                    )
+                }
+            }
+            val allTexts = mutableListOf<String>()
             val parsedLines = buildList {
                 for (index in 0 until minOf(rawLines.length(), MAX_LINES)) {
                     val rawLine = rawLines.optJSONObject(index) ?: continue
-                    val timeMs = rawLine.optLong("timestamp", rawLine.optLong("time", -1L))
-                    if (timeMs < 0L) continue
-                    val main = parseWords(rawLine.optJSONArray("text"))
-                    val fallbackText = rawLine.optString("text").trim()
-                    val mainText = main.text.ifBlank { fallbackText }
-                    if (mainText.isBlank()) continue
-                    val background = parseWords(rawLine.optJSONArray("backgroundText"))
+                    val main = parseTextField(rawLine.opt("text"))
+                    val mainText = main.text
+                    val background = parseTextField(rawLine.opt("backgroundText"))
+                    if (mainText.isBlank() && background.text.isBlank()) continue
                     val combinedText = if (background.text.isNotBlank()) {
-                        "$mainText (${background.text})"
+                        listOf(
+                            mainText,
+                            "(${background.text})",
+                        ).filter(String::isNotBlank).joinToString(" ")
                     } else {
                         mainText
                     }
-                    val words = main.words + background.words
-                    val completeWordTiming = lyricWordsMatchLine(mainText, main.words) &&
-                        (background.text.isBlank() ||
-                            lyricWordsMatchLine(background.text, background.words))
+                    allTexts += combinedText
+                    val timeMs = rawLine.optLong("timestamp", rawLine.optLong("time", -1L))
+                    if (timeMs < 0L) continue
+                    val mainHasWordTiming = lyricWordsMatchLine(mainText, main.words)
+                    val backgroundHasWordTiming = background.text.isNotBlank() &&
+                        lyricWordsMatchLine(background.text, background.words)
+                    // Preserve a valid large or compact vocal independently.
+                    // One untimed Apple part must not disable karaoke for the
+                    // other part on the same visual row.
+                    val hasAnyCompleteWordTiming =
+                        mainHasWordTiming || backgroundHasWordTiming
                     val declaredEnd = rawLine.optLong("endtime", -1L)
-                    val wordEnd = words.maxOfOrNull { it.endMs } ?: timeMs
+                    val wordEnd = (main.words + background.words)
+                        .maxOfOrNull { it.endMs }
+                        ?: timeMs
                     val endMs = maxOf(declaredEnd, wordEnd).takeIf { it > timeMs }
+                    val agentId = rawLine.optString("agent").trim()
                     add(
                         ParsedProviderLine(
                             line = LyricLine(
                                 timeMs = timeMs,
-                                text = combinedText,
-                                words = words,
-                                exactWordTiming = completeWordTiming,
+                                text = mainText,
+                                words = main.words,
+                                exactWordTiming = hasAnyCompleteWordTiming,
                                 endMs = endMs,
+                                backgroundText = background.text,
+                                backgroundWords = background.words,
+                                agentId = agentId,
                             ),
                             vocalTurn = ProviderVocalTurn(
                                 explicitOpposite = rawLine.optBooleanOrNull("oppositeTurn"),
-                                agent = rawLine.optString("agent"),
+                                agent = agentId,
                             ),
                         )
                     )
                 }
             }.sortedBy { it.line.timeMs }
-            if (parsedLines.isEmpty()) return null
+            if (parsedLines.isEmpty()) {
+                val plainLyrics = allTexts.joinToString("\n").trim()
+                return plainLyrics.takeIf { it.isNotBlank() }?.let {
+                    LyricsState(
+                        status = LyricsStatus.PLAIN,
+                        plainLyrics = it,
+                        sourceId = trackId,
+                        wordSyncMode = WordSyncMode.NONE,
+                    )
+                }
+            }
             val alignments = resolveProviderDuetAlignments(parsedLines.map { it.vocalTurn })
             val lines = parsedLines.mapIndexed { index, parsed ->
                 parsed.line.copy(alignment = alignments[index])
@@ -202,14 +271,77 @@ class AppleMusicLyricsClient {
             return LyricsState(
                 status = LyricsStatus.SYNCED,
                 lines = lines,
-                plainLyrics = lines.joinToString("\n") { it.text },
+                plainLyrics = allTexts.joinToString("\n").ifBlank {
+                    lines.joinToString("\n", transform = LyricLine::combinedDisplayText)
+                },
                 sourceId = trackId,
-                wordSyncMode = if (lines.any { it.words.isNotEmpty() }) {
+                wordSyncMode = if (lines.any { it.exactWordTiming }) {
                     WordSyncMode.ENHANCED
                 } else {
-                    WordSyncMode.ESTIMATED
+                    WordSyncMode.NONE
                 },
             )
+        }
+
+        /**
+         * Reads the public Composition & Lyrics section embedded in the
+         * matching Apple Music song page. Only writing roles are retained;
+         * producers, performers and sampled artists are deliberately ignored.
+         */
+        internal fun parseWriterCredit(page: String): String {
+            val sectionStart = page.indexOf("\"id\":\"composer-and-lyrics\"")
+            if (sectionStart < 0) return ""
+            val itemsMarker = page.indexOf("\"items\":[", startIndex = sectionStart)
+            if (itemsMarker < 0) return ""
+            val arrayStart = page.indexOf('[', startIndex = itemsMarker)
+            val itemsJson = extractJsonArray(page, arrayStart) ?: return ""
+            val items = runCatching { JSONArray(itemsJson) }.getOrNull() ?: return ""
+            return buildList {
+                for (index in 0 until items.length()) {
+                    val item = items.optJSONObject(index) ?: continue
+                    val roles = item.optJSONArray("roleNames")
+                    val hasWritingRole = roles != null &&
+                        (0 until roles.length()).any { roleIndex ->
+                            val role = roles.optString(roleIndex).lowercase(Locale.ROOT)
+                            role.contains("songwriter") ||
+                                role.contains("composer") ||
+                                role.contains("lyricist")
+                        }
+                    if (!hasWritingRole) continue
+                    item.optString("name")
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+                        ?.let(::add)
+                }
+            }.distinct().joinToString(", ")
+        }
+
+        private fun extractJsonArray(value: String, startIndex: Int): String? {
+            if (startIndex !in value.indices || value[startIndex] != '[') return null
+            val scanEnd = minOf(value.length, startIndex + MAX_CREDIT_SECTION_CHARS)
+            var depth = 0
+            var inString = false
+            var escaped = false
+            for (index in startIndex until scanEnd) {
+                val char = value[index]
+                if (inString) {
+                    when {
+                        escaped -> escaped = false
+                        char == '\\' -> escaped = true
+                        char == '"' -> inString = false
+                    }
+                    continue
+                }
+                when (char) {
+                    '"' -> inString = true
+                    '[' -> depth++
+                    ']' -> {
+                        depth--
+                        if (depth == 0) return value.substring(startIndex, index + 1)
+                    }
+                }
+            }
+            return null
         }
 
         private data class ParsedWords(val text: String, val words: List<LyricWord>)
@@ -220,6 +352,12 @@ class AppleMusicLyricsClient {
 
         private fun JSONObject.optBooleanOrNull(key: String): Boolean? =
             if (has(key) && !isNull(key)) optBoolean(key, false) else null
+
+        private fun parseTextField(value: Any?): ParsedWords = when (value) {
+            is JSONArray -> parseWords(value)
+            is String -> ParsedWords(value.trim(), emptyList())
+            else -> ParsedWords("", emptyList())
+        }
 
         private fun parseWords(values: JSONArray?): ParsedWords {
             if (values == null) return ParsedWords("", emptyList())

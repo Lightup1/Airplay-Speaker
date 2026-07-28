@@ -53,6 +53,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
+import io.github.jqssun.airplay.lyrics.combinedDisplayText
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.ui.gestures.BrightnessState
 import io.github.jqssun.airplay.ui.gestures.DoubleTapIndicator
@@ -1196,7 +1197,7 @@ private fun SyncedLyricsCard(
                     val index = start + offset
                     val active = index == activeIndex
                     Text(
-                        text = line.text.ifBlank { "♪" },
+                        text = line.combinedDisplayText().ifBlank { "♪" },
                         color = if (active) mint else paper.copy(alpha = if (index > activeIndex) 0.76f else 0.42f),
                         style = if (active) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,

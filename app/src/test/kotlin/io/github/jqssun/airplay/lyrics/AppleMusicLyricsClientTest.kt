@@ -46,7 +46,10 @@ class AppleMusicLyricsClientTest {
 
         assertNotNull(state)
         assertEquals(LyricsStatus.SYNCED, state?.status)
-        assertEquals("A face (And watches)", state?.lines?.first()?.text)
+        assertEquals("A face", state?.lines?.first()?.text)
+        assertEquals("And watches", state?.lines?.first()?.backgroundText)
+        assertEquals(2, state?.lines?.first()?.words?.size)
+        assertEquals(2, state?.lines?.first()?.backgroundWords?.size)
         assertEquals(41_549L, state?.lines?.first()?.endMs)
         assertEquals(LyricAlignment.LEADING, state?.lines?.first()?.alignment)
         assertEquals(LyricAlignment.TRAILING, state?.lines?.last()?.alignment)
@@ -120,5 +123,126 @@ class AppleMusicLyricsClientTest {
 
         assertEquals(LyricAlignment.LEADING, state?.lines?.first()?.alignment)
         assertEquals(LyricAlignment.TRAILING, state?.lines?.last()?.alignment)
+    }
+
+    @Test
+    fun lineSyncedAppleLyricsStayLineSyncedWithoutInventedWords() {
+        val response = """
+            {
+              "lyrics": [
+                {"timestamp":1000,"endtime":2500,"text":"Whole line one"},
+                {"timestamp":3000,"endtime":4500,"text":"Whole line two"}
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 1L)
+
+        assertEquals(LyricsStatus.SYNCED, state?.status)
+        assertTrue(state?.lines?.all { it.words.isEmpty() } == true)
+        assertTrue(state?.lines?.none { it.exactWordTiming } == true)
+        assertEquals(WordSyncMode.NONE, state?.wordSyncMode)
+    }
+
+    @Test
+    fun unsynchronisedAppleLyricsRemainReadablePlainText() {
+        val response = """
+            {
+              "lyrics": [
+                {"text":"First plain line"},
+                {"text":"Second plain line"}
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 1L)
+
+        assertEquals(LyricsStatus.PLAIN, state?.status)
+        assertEquals("First plain line\nSecond plain line", state?.plainLyrics)
+        assertTrue(state?.lines?.isEmpty() == true)
+    }
+
+    @Test
+    fun timedMainVocalSurvivesAnUntimedCompactBackingVocal() {
+        val response = """
+            {
+              "lyrics": [
+                {
+                  "timestamp":1000,
+                  "endtime":3000,
+                  "text":[
+                    {"text":"Main","timestamp":1000,"endtime":1600},
+                    {"text":"line","timestamp":1600,"endtime":2200}
+                  ],
+                  "backgroundText":"soft echo"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val line = AppleMusicLyricsClient.parseResponse(response, 1L)?.lines?.single()
+
+        assertTrue(line?.exactWordTiming == true)
+        assertEquals("Main line", line?.text)
+        assertEquals("soft echo", line?.backgroundText)
+        assertEquals("Main line", line?.words?.joinToString("") { it.text })
+        assertTrue(line?.backgroundWords?.isEmpty() == true)
+    }
+
+    @Test
+    fun timedCompactVocalSurvivesAnUntimedMainVocal() {
+        val response = """
+            {
+              "lyrics": [
+                {
+                  "timestamp":1000,
+                  "endtime":3000,
+                  "text":"Big line",
+                  "backgroundText":[
+                    {"text":"small","timestamp":1500,"endtime":2000},
+                    {"text":"voice","timestamp":2000,"endtime":2500}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val line = AppleMusicLyricsClient.parseResponse(response, 1L)?.lines?.single()
+
+        assertTrue(line?.exactWordTiming == true)
+        assertEquals("Big line", line?.text)
+        assertTrue(line?.words?.isEmpty() == true)
+        assertEquals("small voice", line?.backgroundText)
+        assertEquals("small voice", line?.backgroundWords?.joinToString("") { it.text })
+    }
+
+    @Test
+    fun parsesOnlyWritingCreditsFromAppleCompositionSection() {
+        val applePage = """
+            <script>
+            {
+              "id":"composer-and-lyrics",
+              "items":[
+                {"name":"Madonna","roleNames":["Songwriter"]},
+                {"name":"Stephen Bray","roleNames":["Composer","Songwriter"]},
+                {"name":"Madonna","roleNames":["Lyricist"]},
+                {"name":"Example Producer","roleNames":["Producer"]}
+              ]
+            }
+            </script>
+        """.trimIndent()
+
+        val credit = AppleMusicLyricsClient.parseWriterCredit(applePage)
+
+        assertEquals("Madonna, Stephen Bray", credit)
+    }
+
+    @Test
+    fun missingAppleCompositionSectionDoesNotInventAWriter() {
+        val credit = AppleMusicLyricsClient.parseWriterCredit(
+            """<script>{"id":"artist-biography","items":[]}</script>"""
+        )
+
+        assertEquals("", credit)
     }
 }

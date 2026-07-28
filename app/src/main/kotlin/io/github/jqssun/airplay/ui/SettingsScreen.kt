@@ -39,6 +39,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val aacEnabled by viewModel.aacEnabled.collectAsState()
     val losslessOutput by viewModel.losslessOutput.collectAsState()
     val spatialEnhancement by viewModel.spatialEnhancement.collectAsState()
+    val karaokeEnabled by viewModel.karaokeEnabled.collectAsState()
     val resolution by viewModel.resolution.collectAsState()
     val idlePreview by viewModel.idlePreview.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
@@ -255,6 +256,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_spatial_enhancement_desc),
             checked = spatialEnhancement,
             onCheckedChange = { viewModel.setSpatialEnhancement(it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_karaoke_mode),
+            description = stringResource(R.string.setting_karaoke_mode_desc),
+            checked = karaokeEnabled,
+            onCheckedChange = viewModel::setKaraokeEnabled,
         )
 
         SettingSwitch(

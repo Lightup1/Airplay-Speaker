@@ -1,14 +1,11 @@
 package io.github.jqssun.airplay.lyrics
 
-import java.text.BreakIterator
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.sqrt
 
-private const val MAX_ESTIMATED_WORDS_PER_LINE = 120
-private const val MIN_ESTIMATED_LINE_MS = 1_200L
-private const val MAX_ESTIMATED_LINE_MS = 8_000L
-private val tokenWithTrailingWhitespace = Regex("\\S+\\s*")
+private const val MAX_LINE_DISPLAY_MS = 8_000L
+private const val MIN_MEANINGFUL_WORD_MS = 24L
+private val duetTextSeparatorPattern = Regex("[^\\p{L}\\p{N}]+")
 
 /**
  * Raw vocalist metadata supplied alongside a lyric row. Some providers label
@@ -48,117 +45,211 @@ internal fun resolveProviderDuetAlignments(
 }
 
 /**
- * Adds a complete word timeline to every line-synchronised lyric row.
+ * Repairs precise Apple word timing while preserving line-only lyrics.
  *
- * Precise provider timing is retained when it covers the complete visible
- * line. A missing or partial provider row receives a bounded estimate instead,
- * so one malformed verse cannot disable karaoke for the whole line.
+ * Precise timing is retained when it covers the complete visible line. Missing
+ * or malformed word data is cleared so the UI highlights the complete line
+ * instead of fabricating karaoke timing.
  */
 internal fun LyricsState.withRepairedWordTimings(trackDurationMs: Long): LyricsState {
     if (status != LyricsStatus.SYNCED || lines.isEmpty()) return this
-    val sorted = lines.sortedBy { it.timeMs }
+    val sorted = stableTimedLyricRows(lines, trackDurationMs)
+    if (sorted.isEmpty()) {
+        return copy(
+            status = plainLyrics.takeIf { it.isNotBlank() }
+                ?.let { LyricsStatus.PLAIN }
+                ?: LyricsStatus.NOT_FOUND,
+            lines = emptyList(),
+            wordSyncMode = WordSyncMode.NONE,
+        )
+    }
     val repaired = sorted.mapIndexed { index, line ->
-        val completeExactTimeline = line.exactWordTiming &&
-            hasUsableWordTimeline(line.text, line.words)
-        if (completeExactTimeline) {
-            val wordEnd = line.words.maxOfOrNull { it.endMs } ?: line.timeMs
-            return@mapIndexed line.copy(
-                endMs = maxOf(line.endMs ?: line.timeMs, wordEnd)
-                    .takeIf { it > line.timeMs },
-            )
-        }
-
-        val tokens = tokenizeLyricText(line.text)
-        if (tokens.isEmpty()) return@mapIndexed line.copy(words = emptyList(), exactWordTiming = false)
-
         val nextStart = sorted.getOrNull(index + 1)?.timeMs?.takeIf { it > line.timeMs }
         val trackEnd = trackDurationMs.takeIf { it > line.timeMs }
         val hardBoundary = listOfNotNull(nextStart, trackEnd).minOrNull()
-        val naturalDuration = estimatedVocalDurationMs(tokens)
-        val partialWordEnd = line.words.maxOfOrNull { it.endMs }
-            ?.takeIf { it > line.timeMs }
-        // A provider duration is most useful when no partial word list was
-        // supplied. Existing estimated LRC words often stretch to the next
-        // verse, so cap those to a natural vocal window instead.
-        val providerEnd = line.endMs
-            ?.takeIf { line.words.isEmpty() && it > line.timeMs }
-            ?.coerceAtMost(line.timeMs + MAX_ESTIMATED_LINE_MS)
-        val desiredEnd = maxOf(
-            line.timeMs + naturalDuration,
-            partialWordEnd ?: line.timeMs,
-            providerEnd ?: line.timeMs,
-        )
-        val boundedEnd = hardBoundary?.let { minOf(desiredEnd, it) } ?: desiredEnd
-        val lineEnd = boundedEnd.coerceAtLeast(line.timeMs + 350L)
+        val minimumEnd = hardBoundary?.let {
+            minOf(line.timeMs + 350L, it)
+        } ?: (line.timeMs + 350L)
+        val publishedLineEnd = line.endMs?.takeIf { it > line.timeMs }
+        val inferredLineEnd = listOfNotNull(publishedLineEnd, nextStart, trackEnd)
+            .minOrNull()
+            ?: (line.timeMs + MAX_LINE_DISPLAY_MS)
+        val lineEnd = minOf(inferredLineEnd, line.timeMs + MAX_LINE_DISPLAY_MS)
+            .let { end -> hardBoundary?.let { minOf(end, it) } ?: end }
+            .coerceAtLeast(minimumEnd)
+        val meaningfulProviderEnd = (line.words + line.backgroundWords)
+            .filter { it.endMs - it.startMs >= MIN_MEANINGFUL_WORD_MS }
+            .maxOfOrNull { it.endMs }
+        val unboundedProviderLineEnd = listOfNotNull(
+            line.endMs?.takeIf { it > line.timeMs },
+            meaningfulProviderEnd,
+        ).maxOrNull() ?: lineEnd
+        val providerLineEnd = minOf(
+            unboundedProviderLineEnd,
+            line.timeMs + MAX_LINE_DISPLAY_MS,
+        ).let { end ->
+            hardBoundary?.let { minOf(end, it) } ?: end
+        }
 
+        // Main and backing vocals are deliberately repaired independently.
+        // Their timestamps may overlap, so concatenating both streams and
+        // requiring one monotonically ordered list drops otherwise valid Apple
+        // timing from both visible parts.
+        val repairedMain = repairProviderWordStream(
+            text = line.text,
+            words = line.words,
+            providerLineEnd = providerLineEnd,
+            hardBoundary = hardBoundary,
+        )
+        val repairedBackground = repairProviderWordStream(
+            text = line.backgroundText,
+            words = line.backgroundWords,
+            providerLineEnd = providerLineEnd,
+            hardBoundary = hardBoundary,
+        )
+        val hasMainTiming = repairedMain.isNotEmpty()
+        val hasBackgroundTiming = repairedBackground.isNotEmpty()
+        val alignedLineStart = if (hasMainTiming) {
+            repairedMain.first().startMs.takeIf {
+                abs(it - line.timeMs) <= MAX_PROVIDER_LINE_ONSET_SHIFT_MS
+            } ?: line.timeMs
+        } else {
+            // A backing vocal can start later than an untimed main vocal. It
+            // must never pull the large lyric forward in time.
+            line.timeMs
+        }
+        val repairedEnd = if (hasMainTiming || hasBackgroundTiming) {
+            listOfNotNull(
+                providerLineEnd,
+                repairedMain.lastOrNull()?.endMs,
+                repairedBackground.lastOrNull()?.endMs,
+            ).maxOrNull() ?: lineEnd
+        } else {
+            lineEnd
+        }.let { end ->
+            hardBoundary?.let { minOf(end, it) } ?: end
+        }
         line.copy(
-            words = estimateLyricWords(line.text, line.timeMs, lineEnd),
-            exactWordTiming = false,
-            endMs = lineEnd,
+            timeMs = alignedLineStart,
+            words = repairedMain,
+            backgroundWords = repairedBackground,
+            exactWordTiming = hasMainTiming || hasBackgroundTiming,
+            asideWordRange = null,
+            endMs = repairedEnd.coerceAtLeast(minimumEnd),
         )
     }
     return copy(
-        lines = repaired,
-        plainLyrics = plainLyrics.ifBlank { repaired.joinToString("\n") { it.text } },
+        lines = repaired.sortedBy { it.timeMs },
+        plainLyrics = plainLyrics.ifBlank {
+            repaired.joinToString("\n", transform = LyricLine::combinedDisplayText)
+        },
         wordSyncMode = if (repaired.any { it.exactWordTiming }) {
             WordSyncMode.ENHANCED
         } else {
-            WordSyncMode.ESTIMATED
+            WordSyncMode.NONE
         },
     )
 }
 
 /**
- * Keeps the best available word timing while borrowing Apple-style vocalist
- * turns from another matched provider result. Providers often describe the
- * same line a few hundred milliseconds apart, so time proximity is used when
- * their normalized text is not byte-for-byte identical.
+ * Repairs one vocalist stream without observing any concurrent stream.
+ * Apple timing commonly uses one-millisecond placeholder ends; trustworthy
+ * onsets are retained and only the missing end is reconstructed.
  */
-internal fun LyricsState.withDuetAlignmentFrom(reference: LyricsState?): LyricsState {
-    if (status != LyricsStatus.SYNCED || lines.isEmpty()) return this
-    val stableSource = withStableDuetAlignment()
-    if (stableSource.lines.any { it.alignment == LyricAlignment.TRAILING }) return stableSource
-    val stableReference = reference
-        ?.takeIf { it.status == LyricsStatus.SYNCED }
-        ?.withStableDuetAlignment()
-    val referenceLines = stableReference?.lines
-        ?.takeIf { rows ->
-            rows.any { it.alignment == LyricAlignment.LEADING } &&
-                rows.any { it.alignment == LyricAlignment.TRAILING }
-        }
-        ?: return stableSource
-
-    val aligned = stableSource.lines.map { line ->
-        val normalizedText = normalizeDuetText(line.text)
-        val best = referenceLines.asSequence()
-            .map { candidate ->
-                val timeDistance = abs(candidate.timeMs - line.timeMs)
-                val candidateText = normalizeDuetText(candidate.text)
-                val textScore = when {
-                    normalizedText.isNotBlank() && normalizedText == candidateText -> 10_000
-                    normalizedText.isNotBlank() && candidateText.isNotBlank() &&
-                        (normalizedText.contains(candidateText) ||
-                            candidateText.contains(normalizedText)) -> 5_000
-                    else -> 0
-                }
-                candidate to (textScore - timeDistance.coerceAtMost(5_000L).toInt())
-            }
-            .filter { (candidate, score) ->
-                val distance = abs(candidate.timeMs - line.timeMs)
-                (distance <= DUET_TEXT_MATCH_WINDOW_MS && score > 0) ||
-                    (distance <= DUET_TIME_MATCH_WINDOW_MS && score >= -DUET_TIME_MATCH_WINDOW_MS)
-            }
-            .maxByOrNull { it.second }
-            ?.first
-
-        best?.let { line.copy(alignment = it.alignment) } ?: line
+private fun repairProviderWordStream(
+    text: String,
+    words: List<LyricWord>,
+    providerLineEnd: Long,
+    hardBoundary: Long?,
+): List<LyricWord> {
+    if (
+        text.isBlank() ||
+        words.isEmpty() ||
+        !lyricWordsMatchLine(text, words) ||
+        !hasOrderedWordStarts(words) ||
+        words.any { hardBoundary != null && it.startMs >= hardBoundary }
+    ) {
+        return emptyList()
     }
-    return stableSource.copy(lines = aligned).withStableDuetAlignment()
+    var valid = true
+    val repaired = words.mapIndexed { index, word ->
+        val followingStart = words.getOrNull(index + 1)?.startMs
+        val suppliedDuration = word.endMs - word.startMs
+        val requestedEnd = when {
+            suppliedDuration >= MIN_MEANINGFUL_WORD_MS &&
+                (followingStart == null || word.endMs <= followingStart + 80L) -> word.endMs
+            followingStart != null -> followingStart
+            else -> providerLineEnd
+        }
+        val wordBoundary = listOfNotNull(followingStart, hardBoundary).minOrNull()
+        val boundedEnd = wordBoundary?.let { minOf(requestedEnd, it) } ?: requestedEnd
+        if (boundedEnd <= word.startMs) valid = false
+        word.copy(endMs = boundedEnd.coerceAtLeast(word.startMs + 1L))
+    }
+    return repaired.takeIf { valid && hasUsablePartialWordTimeline(it) }.orEmpty()
+}
+
+internal fun LyricLine.combinedDisplayText(): String = when {
+    text.isNotBlank() && backgroundText.isNotBlank() -> "$text ($backgroundText)"
+    text.isNotBlank() -> text
+    backgroundText.isNotBlank() -> "($backgroundText)"
+    else -> ""
+}
+
+/**
+ * Removes malformed and near-identical provider rows before the live rail is
+ * built. Duplicate timestamps otherwise cause one row to become active for
+ * only a single frame, which looks like a missing or stuck lyric section.
+ */
+private fun stableTimedLyricRows(
+    source: List<LyricLine>,
+    trackDurationMs: Long,
+): List<LyricLine> {
+    val result = mutableListOf<LyricLine>()
+    source.asSequence()
+        .filter { line ->
+            line.combinedDisplayText().isNotBlank() &&
+                line.timeMs >= 0L &&
+                (trackDurationMs <= 0L || line.timeMs <= trackDurationMs + 2_000L)
+        }
+        .sortedBy { it.timeMs }
+        .forEach { rawLine ->
+            val line = rawLine.copy(
+                endMs = rawLine.endMs?.takeIf { it > rawLine.timeMs },
+            )
+            val normalized = normalizeDuetText(line.combinedDisplayText())
+            val duplicateIndex = result.indices.reversed().firstOrNull { index ->
+                val existing = result[index]
+                line.timeMs - existing.timeMs <= DUPLICATE_LYRIC_WINDOW_MS &&
+                    normalizeDuetText(existing.combinedDisplayText()) == normalized
+            }
+            if (duplicateIndex == null) {
+                result += line
+            } else if (lyricRowQuality(line) > lyricRowQuality(result[duplicateIndex])) {
+                result[duplicateIndex] = line
+            }
+        }
+    return result
+}
+
+private fun lyricRowQuality(line: LyricLine): Int =
+    (if (line.exactWordTiming) 1_000 else 0) +
+        (line.words.size + line.backgroundWords.size) * 4 +
+        (if (line.endMs != null) 20 else 0)
+
+private fun hasOrderedWordStarts(words: List<LyricWord>): Boolean {
+    if (words.isEmpty()) return false
+    var previous = Long.MIN_VALUE
+    return words.all { word ->
+        val ordered = word.startMs >= 0L && word.startMs >= previous
+        previous = word.startMs
+        ordered
+    }
 }
 
 /**
  * A valid duet must contain both sides. This final guard prevents malformed
- * provider responses from pushing an entire song to the right edge.
+ * Apple metadata from pushing an entire song to the right edge.
  */
 internal fun LyricsState.withStableDuetAlignment(): LyricsState {
     if (status != LyricsStatus.SYNCED || lines.isEmpty()) return this
@@ -171,8 +262,8 @@ internal fun LyricsState.withStableDuetAlignment(): LyricsState {
     )
 }
 
-/** Higher scores indicate more complete provider-supplied word timing. */
-internal fun LyricsState.wordTimingQualityScore(): Int {
+/** Higher scores indicate more complete Apple-supplied word timing. */
+internal fun LyricsState.wordTimingQualityScore(trackDurationMs: Long = 0L): Int {
     if (status != LyricsStatus.SYNCED || lines.isEmpty()) {
         return when (status) {
             LyricsStatus.PLAIN -> 100
@@ -180,95 +271,61 @@ internal fun LyricsState.wordTimingQualityScore(): Int {
             else -> 0
         }
     }
-    val complete = lines.count { hasUsableWordTimeline(it.text, it.words) }
-    val exact = lines.count {
-        it.exactWordTiming && hasUsableWordTimeline(it.text, it.words)
+    val usableTimelines = lines.map { line ->
+        hasUsableWordTimeline(line.text, line.words) ||
+            hasUsableWordTimeline(line.backgroundText, line.backgroundWords)
     }
+    val complete = usableTimelines.count { it }
+    val exact = lines.indices.count { index ->
+        lines[index].exactWordTiming && usableTimelines[index]
+    }
+    val recoverableOnsets = lines.count {
+        it.exactWordTiming &&
+            (
+                lyricWordsMatchLine(it.text, it.words) &&
+                    hasOrderedWordStarts(it.words) ||
+                    lyricWordsMatchLine(it.backgroundText, it.backgroundWords) &&
+                    hasOrderedWordStarts(it.backgroundWords)
+                )
+    }
+    val invalidRows = lines.count { line ->
+        line.timeMs < 0L ||
+            (trackDurationMs > 0L && line.timeMs > trackDurationMs + 2_000L)
+    }
+    val duplicateRows = lines.groupingBy {
+        it.timeMs to normalizeDuetText(it.combinedDisplayText())
+    }.eachCount().values.sumOf { (it - 1).coerceAtLeast(0) }
     val lineCount = lines.size.coerceAtLeast(1)
     return 1_000 +
         (complete * 500 / lineCount) +
         (exact * 1_000 / lineCount) +
-        lineCount.coerceAtMost(200)
+        (recoverableOnsets * 300 / lineCount) +
+        lineCount.coerceAtMost(200) -
+        invalidRows * 180 -
+        duplicateRows * 40
 }
 
 internal fun hasUsableWordTimeline(text: String, words: List<LyricWord>): Boolean {
     if (!lyricWordsMatchLine(text, words)) return false
+    return hasUsablePartialWordTimeline(words)
+}
+
+private fun hasUsablePartialWordTimeline(words: List<LyricWord>): Boolean {
+    if (words.isEmpty()) return false
     var previousStart = Long.MIN_VALUE
-    return words.all { word ->
+    val ordered = words.all { word ->
         val valid = word.startMs >= previousStart && word.endMs > word.startMs
         previousStart = word.startMs
         valid
     }
-}
-
-internal fun estimateLyricWords(
-    text: String,
-    startMs: Long,
-    requestedEndMs: Long,
-): List<LyricWord> {
-    val tokens = tokenizeLyricText(text)
-    if (tokens.isEmpty()) return emptyList()
-    val endMs = requestedEndMs.coerceAtLeast(startMs + tokens.size * 80L)
-    val weights = tokens.map { token ->
-        val characterCount = token.codePointCount(0, token.length).coerceAtLeast(1)
-        sqrt(characterCount.toDouble()) + if (token.any { it in ",.;:!?…" }) 0.35 else 0.0
-    }
-    val totalWeight = weights.sum().coerceAtLeast(1.0)
-    val duration = endMs - startMs
-    var cumulative = 0.0
-    return tokens.mapIndexed { index, token ->
-        val wordStart = startMs + (duration * (cumulative / totalWeight)).toLong()
-        cumulative += weights[index]
-        val wordEnd = if (index == tokens.lastIndex) {
-            endMs
-        } else {
-            startMs + (duration * (cumulative / totalWeight)).toLong()
-        }
-        LyricWord(token, wordStart, wordEnd.coerceAtLeast(wordStart + 1L))
-    }
-}
-
-internal fun tokenizeLyricText(text: String): List<String> {
-    if (text.isBlank()) return emptyList()
-    if (text.any(Char::isWhitespace)) {
-        return tokenWithTrailingWhitespace.findAll(text)
-            .map { it.value }
-            .take(MAX_ESTIMATED_WORDS_PER_LINE)
-            .toList()
-    }
-
-    // ICU word boundaries provide a usable fallback for Thai, CJK, and other
-    // scripts that do not separate every sung word with ASCII spaces.
-    val iterator = BreakIterator.getWordInstance(Locale.getDefault())
-    iterator.setText(text)
-    val tokens = mutableListOf<String>()
-    var start = iterator.first()
-    var end = iterator.next()
-    while (end != BreakIterator.DONE) {
-        val part = text.substring(start, end)
-        if (part.any { it.isLetterOrDigit() }) {
-            tokens += part
-        } else if (tokens.isNotEmpty()) {
-            tokens[tokens.lastIndex] += part
-        } else if (part.isNotEmpty()) {
-            tokens += part
-        }
-        if (tokens.size >= MAX_ESTIMATED_WORDS_PER_LINE) break
-        start = end
-        end = iterator.next()
-    }
-    return tokens.ifEmpty { listOf(text) }
-}
-
-private fun estimatedVocalDurationMs(tokens: List<String>): Long {
-    val characters = tokens.sumOf { it.codePointCount(0, it.length) }
-    return (tokens.size * 360L + characters * 24L)
-        .coerceIn(MIN_ESTIMATED_LINE_MS, MAX_ESTIMATED_LINE_MS)
+    if (!ordered) return false
+    val meaningful = words.count { it.endMs - it.startMs >= MIN_MEANINGFUL_WORD_MS }
+    return meaningful >= (words.size * 2 + 2) / 3
 }
 
 private fun normalizeDuetText(value: String): String = value
     .lowercase(Locale.ROOT)
-    .replace(Regex("[^\\p{L}\\p{N}]+"), "")
+    .replace(duetTextSeparatorPattern, "")
 
 private fun List<LyricAlignment>.withStableDuetSides(): List<LyricAlignment> {
     if (none { it == LyricAlignment.TRAILING }) return this
@@ -278,5 +335,5 @@ private fun List<LyricAlignment>.withStableDuetSides(): List<LyricAlignment> {
     return this
 }
 
-private const val DUET_TIME_MATCH_WINDOW_MS = 700L
-private const val DUET_TEXT_MATCH_WINDOW_MS = 4_000L
+private const val MAX_PROVIDER_LINE_ONSET_SHIFT_MS = 1_500L
+private const val DUPLICATE_LYRIC_WINDOW_MS = 220L

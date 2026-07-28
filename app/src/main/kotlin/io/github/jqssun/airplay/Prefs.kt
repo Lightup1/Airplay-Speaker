@@ -23,6 +23,8 @@ object Prefs {
     const val AAC_ENABLED = "aac_enabled"; const val DEF_AAC_ENABLED = true
     const val LOSSLESS_OUTPUT = "lossless_output"; const val DEF_LOSSLESS_OUTPUT = true
     const val SPATIAL_ENHANCEMENT = "spatial_enhancement"; const val DEF_SPATIAL_ENHANCEMENT = false
+    const val KARAOKE_ENABLED = "karaoke_enabled"; const val DEF_KARAOKE_ENABLED = false
+    const val KARAOKE_VOCAL_LEVEL = "karaoke_vocal_level"; const val DEF_KARAOKE_VOCAL_LEVEL = 35
     const val APP_VOLUME = "app_volume"; const val DEF_APP_VOLUME = 100
     const val RESOLUTION = "resolution"; const val DEF_RESOLUTION = "auto"
     const val MAX_FPS = "max_fps"; const val DEF_MAX_FPS = 60

@@ -746,6 +746,7 @@ private fun TvSettingsPanel(
     val swAlac by viewModel.swAlacEnabled.collectAsState()
     val losslessOutput by viewModel.losslessOutput.collectAsState()
     val spatialEnhancement by viewModel.spatialEnhancement.collectAsState()
+    val karaokeEnabled by viewModel.karaokeEnabled.collectAsState()
     val allowNew by viewModel.allowNewConn.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
@@ -849,6 +850,14 @@ private fun TvSettingsPanel(
                     stringResource(R.string.setting_spatial_enhancement_desc),
                     spatialEnhancement,
                     viewModel::setSpatialEnhancement,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_karaoke_mode),
+                    stringResource(R.string.setting_karaoke_mode_desc),
+                    karaokeEnabled,
+                    viewModel::setKaraokeEnabled,
                 )
             }
             item {

@@ -28,6 +28,76 @@ class LyricsPresentationTest {
     }
 
     @Test
+    fun displayClockAbsorbsSmallAudioQueueJumpsWithoutMovingBackwards() {
+        val next = smoothLyricDisplayPosition(
+            previousMs = 10_000L,
+            sampledMs = 9_920L,
+            frameDeltaMs = 16L,
+        )
+
+        assertTrue(next > 10_000L)
+        assertTrue(next < 10_016L)
+    }
+
+    @Test
+    fun displayClockSnapsToARealSeek() {
+        assertEquals(
+            25_000L,
+            smoothLyricDisplayPosition(
+                previousMs = 10_000L,
+                sampledMs = 25_000L,
+                frameDeltaMs = 16L,
+            ),
+        )
+    }
+
+    @Test
+    fun highlightedGraphemeGrowsThenReturnsToItsOriginalSize() {
+        assertEquals(0f, lyricHighlightGlyphPulse(0f), 0.001f)
+        assertEquals(1f, lyricHighlightGlyphPulse(0.5f), 0.001f)
+        assertEquals(0f, lyricHighlightGlyphPulse(1f), 0.001f)
+    }
+
+    @Test
+    fun liveLineBreathesWithoutChangingItsRestingLayout() {
+        assertEquals(1f, lyricHighlightGlyphScale(0f, 1_200L), 0.001f)
+        assertTrue(lyricHighlightGlyphScale(0.5f, 1_200L) > 1.02f)
+        assertEquals(1f, lyricHighlightGlyphScale(1f, 1_200L), 0.001f)
+        assertTrue(
+            lyricHighlightGlyphScale(0.5f, 1_200L) >
+                lyricHighlightGlyphScale(0.5f, 300L)
+        )
+        assertEquals(1.14f, lyricHighlightGlyphScale(0.5f, 2_000L), 0.001f)
+    }
+
+    @Test
+    fun highlightHeadNeverTargetsTheInvisibleWordSeparator() {
+        val range = lyricHighlightGraphemeRange(
+            wordText = "music ",
+            wordStartOffset = 10,
+            progress = 0.999f,
+        )
+
+        assertEquals(LyricHighlightGraphemeRange(14, 15), range)
+    }
+
+    @Test
+    fun highlightHeadKeepsEmojiAndCombiningTextIntact() {
+        val emoji = lyricHighlightGraphemeRange("A🎵 ", 0, 0.8f)
+        val thai = lyricHighlightGraphemeRange("ก้ ", 5, 0.5f)
+
+        assertEquals(LyricHighlightGraphemeRange(1, 3), emoji)
+        assertEquals(LyricHighlightGraphemeRange(5, 7), thai)
+    }
+
+    @Test
+    fun onlySustainedWordsReceiveTheWideAura() {
+        assertEquals(0f, lyricSustainedWordAura(0.5f, 420L), 0.001f)
+        assertTrue(lyricSustainedWordAura(0.5f, 1_200L) > 0.95f)
+        assertEquals(0f, lyricSustainedWordAura(1f, 1_200L), 0.001f)
+    }
+
+    @Test
     fun progressivePrefixDoesNotSplitCombiningTextOrEmoji() {
         val thai = "ก้B"
         val emoji = "A🎵B"
@@ -63,4 +133,15 @@ class LyricsPresentationTest {
         assertTrue(lyricWordsMatchLine("Don't stop", complete))
         assertTrue(!lyricWordsMatchLine("Don't stop", incomplete))
     }
+
+    @Test
+    fun wordMatchingToleratesTypographyOnlyPunctuationDifferences() {
+        val words = listOf(
+            LyricWord("Don't ", 1_000L, 1_400L),
+            LyricWord("stop", 1_400L, 1_900L),
+        )
+
+        assertTrue(lyricWordsMatchLine("Don’t stop!", words))
+    }
+
 }

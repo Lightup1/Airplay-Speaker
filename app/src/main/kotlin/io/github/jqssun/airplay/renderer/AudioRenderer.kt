@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import io.github.jqssun.airplay.bridge.NativeBridge
 import java.nio.ByteBuffer
@@ -18,6 +19,28 @@ internal fun resolveTrackGain(
     appVolume: Float,
 ): Float = (senderVolume * appVolume).coerceIn(0f, 1f)
 
+/**
+ * Slew-limits AudioTrack queue measurements before they reach the lyric clock.
+ * Packet writes make the raw queue move in small steps; subtracting those
+ * steps directly can make a word highlight visibly jump backwards. A queue is
+ * allowed to grow by less than elapsed wall time, keeping the audible position
+ * monotonic during normal playback while still following a real buffer change.
+ */
+internal fun smoothAudioQueueEstimate(
+    previousMs: Long,
+    measuredMs: Long,
+    elapsedMs: Long,
+    initialized: Boolean,
+): Long {
+    val measured = measuredMs.coerceAtLeast(0L)
+    if (!initialized) return measured
+    val elapsed = elapsedMs.coerceAtLeast(1L)
+    val maxRise = (elapsed * 3L / 4L + 4L).coerceAtLeast(5L)
+    val maxFall = (elapsed * 2L + 8L).coerceAtLeast(10L)
+    val delta = measured - previousMs
+    return previousMs + delta.coerceIn(-maxFall, maxRise)
+}
+
 class AudioRenderer {
 
     private var codec: MediaCodec? = null
@@ -28,11 +51,19 @@ class AudioRenderer {
     private var failedCt = -1
     private var swAlacHandle = 0L  // software ALAC decoder handle
     private val spatialEnhancer = StereoSpatialEnhancer()
+    private val vocalReducer = StereoVocalReducer()
+    private var outputSampleRate = 44100
+    @Volatile private var totalPcmBytesWritten = 0L
+    @Volatile private var cachedOutputQueueMs = 0L
+    @Volatile private var outputQueueSampleAtMs = 0L
+    @Volatile private var outputQueueEstimateInitialized = false
     @Volatile var swAlacEnabled = true
     @Volatile var audioBufferMultiplier = 4
     @Volatile var realtimeDecoderPriority = true
     @Volatile var losslessOutput = true
     @Volatile var spatialEnhancementEnabled = false; private set
+    @Volatile var karaokeEnabled = false; private set
+    @Volatile var karaokeVocalLevel = 35; private set
     @Volatile var volume = 1.0f; private set
     @Volatile var appVolume = 1.0f; private set
     @Volatile var codecLabel = ""; private set
@@ -47,6 +78,10 @@ class AudioRenderer {
             try {
                 it.pause()
                 it.flush()
+                totalPcmBytesWritten = 0L
+                cachedOutputQueueMs = 0L
+                outputQueueSampleAtMs = 0L
+                outputQueueEstimateInitialized = false
                 it.play()
             } catch (e: IllegalStateException) {
                 Log.w(TAG, "Unable to flush PCM output", e)
@@ -211,6 +246,7 @@ class AudioRenderer {
     private fun _ensureAudioTrack(sampleRate: Int = 44100, channels: Int = 2) {
         if (track != null) return
         outputChannels = channels
+        outputSampleRate = sampleRate
         val channelMask = if (channels == 1) {
             AudioFormat.CHANNEL_OUT_MONO
         } else {
@@ -271,6 +307,10 @@ class AudioRenderer {
         )
 
         track = newTrack.also {
+            totalPcmBytesWritten = 0L
+            cachedOutputQueueMs = 0L
+            outputQueueSampleAtMs = 0L
+            outputQueueEstimateInitialized = false
             it.setVolume(effectiveTrackVolume())
             it.play()
         }
@@ -303,6 +343,16 @@ class AudioRenderer {
      */
     private fun writePcm(data: ByteArray) {
         val output = track ?: return
+        vocalReducer.processInPlace(
+            pcm = data,
+            channels = outputChannels,
+            sampleRate = outputSampleRate,
+            reduction = if (karaokeEnabled) {
+                1f - karaokeVocalLevel / 100f
+            } else {
+                0f
+            },
+        )
         if (spatialEnhancementEnabled) {
             spatialEnhancer.processInPlace(data, outputChannels)
         }
@@ -319,8 +369,41 @@ class AudioRenderer {
                 pendingReset = true
                 return
             }
+            totalPcmBytesWritten += written
             offset += written
         }
+    }
+
+    /**
+     * Estimates PCM that has entered AudioTrack but has not reached the
+     * speaker yet. The lyric clock subtracts this small local queue so visual
+     * highlighting follows audible output instead of decoded input.
+     */
+    fun estimatedQueuedAudioMs(): Long {
+        val now = SystemClock.elapsedRealtime()
+        if (now - outputQueueSampleAtMs < OUTPUT_QUEUE_SAMPLE_INTERVAL_MS) {
+            return cachedOutputQueueMs
+        }
+        val output = track ?: return 0L
+        val frameBytes = outputChannels * Short.SIZE_BYTES
+        if (frameBytes <= 0 || outputSampleRate <= 0) return 0L
+        val writtenFrames = totalPcmBytesWritten / frameBytes
+        val playedFrames = runCatching {
+            output.playbackHeadPosition.toLong() and 0xffff_ffffL
+        }.getOrElse { return cachedOutputQueueMs }
+        val queuedFrames = (writtenFrames - playedFrames).coerceAtLeast(0L)
+        val measured = (queuedFrames * 1_000L / outputSampleRate)
+            .coerceIn(0L, MAX_REPORTED_OUTPUT_QUEUE_MS)
+        val estimate = smoothAudioQueueEstimate(
+            previousMs = cachedOutputQueueMs,
+            measuredMs = measured,
+            elapsedMs = now - outputQueueSampleAtMs,
+            initialized = outputQueueEstimateInitialized,
+        )
+        cachedOutputQueueMs = estimate
+        outputQueueSampleAtMs = now
+        outputQueueEstimateInitialized = true
+        return estimate
     }
 
     fun setVolume(vol: Float) {
@@ -354,13 +437,34 @@ class AudioRenderer {
         Log.i(TAG, "Spatial / surround enhancement: ${if (enabled) "on" else "off"}")
     }
 
+    /**
+     * Controls centre-channel attenuation used by Karaoke Mode. A vocal level
+     * of 100 keeps the original mix; 0 applies the strongest reduction.
+     */
+    fun setKaraokeMode(enabled: Boolean, vocalLevelPercent: Int) {
+        karaokeEnabled = enabled
+        karaokeVocalLevel = vocalLevelPercent.coerceIn(0, 100)
+        refreshOutputPathLabel()
+        Log.i(
+            TAG,
+            "Karaoke vocal reduction: ${if (enabled) "on" else "off"} " +
+                "(vocalLevel=$karaokeVocalLevel%)",
+        )
+    }
+
     private fun refreshOutputPathLabel() {
-        outputPathLabel = if (
-            spatialEnhancementEnabled && baseOutputPathLabel.isNotBlank()
-        ) {
-            "$baseOutputPathLabel · Spatial stereo"
-        } else {
+        if (baseOutputPathLabel.isBlank()) {
+            outputPathLabel = ""
+            return
+        }
+        val effects = buildList {
+            if (karaokeEnabled) add("Smart Vocal Focus $karaokeVocalLevel%")
+            if (spatialEnhancementEnabled) add("Spatial stereo")
+        }
+        outputPathLabel = if (effects.isEmpty()) {
             baseOutputPathLabel
+        } else {
+            "$baseOutputPathLabel · ${effects.joinToString(" · ")}"
         }
     }
 
@@ -379,6 +483,12 @@ class AudioRenderer {
         currentCt = -1
         currentPcmFormat = null
         outputChannels = 2
+        outputSampleRate = 44100
+        totalPcmBytesWritten = 0L
+        cachedOutputQueueMs = 0L
+        outputQueueSampleAtMs = 0L
+        outputQueueEstimateInitialized = false
+        vocalReducer.reset()
         failedCt = -1
         codecLabel = ""
         baseOutputPathLabel = ""
@@ -388,6 +498,8 @@ class AudioRenderer {
     fun release() = stop()
 
     companion object {
+        private const val MAX_REPORTED_OUTPUT_QUEUE_MS = 1_200L
+        private const val OUTPUT_QUEUE_SAMPLE_INTERVAL_MS = 40L
         private const val TAG = "AudioRenderer"
         const val CT_ALAC = 2
         const val CT_AAC_LC = 4

@@ -56,15 +56,14 @@
     <string name="btn_stop">Stop</string>
     <string name="unknown_track">Unknown</string>
     <string name="lyrics_title">SYNCED LYRICS</string>
-    <string name="lyrics_source">LRCLIB</string>
+    <string name="lyrics_source">APPLE MUSIC</string>
     <string name="lyrics_searching">Finding synchronized lyrics…</string>
     <string name="lyrics_waiting">Waiting for track details…</string>
     <string name="lyrics_not_found">No synchronized lyrics found for this track</string>
     <string name="lyrics_error">Lyrics are temporarily unavailable</string>
     <string name="lyrics_instrumental">Instrumental track</string>
     <string name="lyrics_word_sync_exact">WORD SYNC · PRECISE</string>
-    <string name="lyrics_word_sync_smart">WORD SYNC · SMART</string>
-    <string name="lyrics_line_sync">LYRICS · LRCLIB</string>
+    <string name="lyrics_line_sync">LYRICS · APPLE MUSIC</string>
 
     <!-- Content descriptions -->
     <string name="cd_pip">Picture-in-Picture</string>
@@ -175,6 +174,8 @@
     <string name="setting_lossless_output_desc">Keep decoded ALAC at unity gain without app-side volume scaling. Use the TV or receiver for volume.</string>
     <string name="setting_spatial_enhancement">Spatial / Surround Enhancement</string>
     <string name="setting_spatial_enhancement_desc">Widen stereo sound with lightweight in-app processing. This is not Dolby Atmos.</string>
+    <string name="setting_karaoke_mode">Smart Karaoke / Vocal Focus</string>
+    <string name="setting_karaoke_mode_desc">Detect and reduce stereo-centred lead vocals while protecting bass, stereo ambience, upper detail and sharp instrument attacks. Press OK on the lyrics screen to adjust the vocal level.</string>
     <string name="setting_sw_alac">Software ALAC decoder</string>
     <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
     <string name="setting_aac">AAC audio</string>

@@ -43,14 +43,9 @@ import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
 import io.github.jqssun.airplay.download.VideoDownloader
 import io.github.jqssun.airplay.lyrics.AppleMusicLyricsClient
-import io.github.jqssun.airplay.lyrics.LrclibClient
-import io.github.jqssun.airplay.lyrics.LyricsOvhClient
-import io.github.jqssun.airplay.lyrics.LyricsPlusClient
 import io.github.jqssun.airplay.lyrics.LyricsRequest
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
-import io.github.jqssun.airplay.lyrics.NeteaseLyricsClient
-import io.github.jqssun.airplay.lyrics.withDuetAlignmentFrom
 import io.github.jqssun.airplay.lyrics.withRepairedWordTimings
 import io.github.jqssun.airplay.lyrics.withStableDuetAlignment
 import io.github.jqssun.airplay.lyrics.wordTimingQualityScore
@@ -64,13 +59,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class VideoPlaybackInfo(
     val positionMs: Long = 0,
@@ -80,6 +74,23 @@ data class VideoPlaybackInfo(
     val skipSilence: Boolean = false,
     val buffering: Boolean = false,
 )
+
+internal fun compensateAudioOutputLatency(
+    rawPositionMs: Long,
+    queuedAudioMs: Long,
+): Long = (rawPositionMs - queuedAudioMs.coerceAtLeast(0L)).coerceAtLeast(0L)
+
+internal fun stabilizeReportedProgress(
+    predictedPositionMs: Long,
+    reportedPositionMs: Long,
+): Long {
+    val error = reportedPositionMs - predictedPositionMs
+    return when {
+        abs(error) <= 120L -> predictedPositionMs + error / 5L
+        abs(error) <= 600L -> predictedPositionMs + error / 2L
+        else -> reportedPositionMs
+    }.coerceAtLeast(0L)
+}
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandler {
@@ -156,11 +167,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
     val trackInfo = _trackInfo.asStateFlow()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val duetLyricsClient = AppleMusicLyricsClient()
-    private val synchronizedLyricsClient = NeteaseLyricsClient()
-    private val preciseLyricsClient = LyricsPlusClient()
-    private val plainLyricsClient = LyricsOvhClient()
-    private val lyricsFallbackClient = LrclibClient()
+    private val appleMusicLyricsClient = AppleMusicLyricsClient()
     private val _lyrics = MutableStateFlow(LyricsState())
     val lyrics = _lyrics.asStateFlow()
     private var lyricsJob: Job? = null
@@ -180,6 +187,14 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
     @Volatile private var _lastAudioPacketAtMs = 0L
 
     fun currentPositionMs(): Long {
+        val raw = rawCurrentPositionMs()
+        return compensateAudioOutputLatency(
+            rawPositionMs = raw,
+            queuedAudioMs = audioRenderer.estimatedQueuedAudioMs(),
+        ).coerceAtMost(_durationMs.value.coerceAtLeast(0L))
+    }
+
+    private fun rawCurrentPositionMs(): Long {
         if (_progressBaseTime == 0L || !_playing.value) return _positionMs.value
         val elapsed = SystemClock.elapsedRealtime() - _progressBaseTime
         return (_progressBaseMs + elapsed).coerceIn(0, _durationMs.value)
@@ -229,6 +244,16 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 Prefs.SPATIAL_ENHANCEMENT,
                 Prefs.DEF_SPATIAL_ENHANCEMENT,
             )
+        )
+        audioRenderer.setKaraokeMode(
+            enabled = prefs.getBoolean(
+                Prefs.KARAOKE_ENABLED,
+                Prefs.DEF_KARAOKE_ENABLED,
+            ),
+            vocalLevelPercent = prefs.getInt(
+                Prefs.KARAOKE_VOCAL_LEVEL,
+                Prefs.DEF_KARAOKE_VOCAL_LEVEL,
+            ),
         )
         createNotificationChannel()
         dacpController = DacpController(this)
@@ -457,6 +482,16 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 Prefs.SPATIAL_ENHANCEMENT,
                 Prefs.DEF_SPATIAL_ENHANCEMENT,
             )
+        )
+        audioRenderer.setKaraokeMode(
+            enabled = prefs.getBoolean(
+                Prefs.KARAOKE_ENABLED,
+                Prefs.DEF_KARAOKE_ENABLED,
+            ),
+            vocalLevelPercent = prefs.getInt(
+                Prefs.KARAOKE_VOCAL_LEVEL,
+                Prefs.DEF_KARAOKE_VOCAL_LEVEL,
+            ),
         )
         videoRenderer.enforceSdr = prefs.getBoolean(Prefs.ENFORCE_SDR, Prefs.DEF_ENFORCE_SDR)
         videoRenderer.keyAllowFrameDrop = prefs.getBoolean(Prefs.KEY_ALLOW_FRAME_DROP, Prefs.DEF_KEY_ALLOW_FRAME_DROP)
@@ -825,6 +860,16 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
             .apply()
     }
 
+    fun setKaraokeMode(enabled: Boolean, vocalLevelPercent: Int) {
+        val vocalLevel = vocalLevelPercent.coerceIn(0, 100)
+        audioRenderer.setKaraokeMode(enabled, vocalLevel)
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Prefs.KARAOKE_ENABLED, enabled)
+            .putInt(Prefs.KARAOKE_VOCAL_LEVEL, vocalLevel)
+            .apply()
+    }
+
     private fun refreshMediaSessionActivity() {
         mediaSession?.isActive = _audioOnly.value || _videoPlaybackActive.value
     }
@@ -934,9 +979,14 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         val durMs = ((end - start) / rate * 1000).toLong().coerceAtLeast(0)
         // pause/resume transitions emit degenerate progress; keep the last good value
         if (durMs <= 0) return
-        _positionMs.value = posMs
+        val stablePosition = if (_progressBaseTime == 0L) {
+            posMs
+        } else {
+            stabilizeReportedProgress(rawCurrentPositionMs(), posMs)
+        }
+        _positionMs.value = stablePosition
         _durationMs.value = durMs
-        _progressBaseMs = posMs
+        _progressBaseMs = stablePosition
         _progressBaseTime = SystemClock.elapsedRealtime()
         _requestLyricsIfReady()
         _updatePlaybackState()
@@ -1001,74 +1051,33 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         lyricsJob?.cancel()
         lyricsKey = key
         _lyrics.value = LyricsState(LyricsStatus.LOADING)
-        log("Lyrics: searching ${info.artist} - ${info.title}")
-        lyricsJob = serviceScope.launch {
+        log("Lyrics: searching Apple Music for ${info.artist} - ${info.title}")
+        // Parsing and timeline repair stay off Main so a large Apple response
+        // cannot interrupt playback or remote input on a low-memory TV.
+        lyricsJob = serviceScope.launch(Dispatchers.Default) {
             val request = LyricsRequest(
                 title = info.title,
                 artist = info.artist,
                 album = info.album,
                 durationMs = duration,
             )
-            val candidates = mutableListOf<Pair<String, LyricsState>>()
-
-            // Query the strongest timed sources together. Picking by timing
-            // completeness avoids a partially parsed first result masking a
-            // later provider with true word-by-word data.
-            coroutineScope {
-                val apple = async { duetLyricsClient.find(request) }
-                val netease = async { synchronizedLyricsClient.find(request) }
-                apple.await()?.let { candidates += "Apple Music" to it }
-                netease.await()?.let { candidates += "NetEase" to it }
+            val appleResult = withTimeoutOrNull(LYRICS_SEARCH_WINDOW_MS) {
+                appleMusicLyricsClient.find(request)
             }
-
-            var selected = candidates.bestDisplayableLyrics()
-            if ((selected?.second?.wordTimingQualityScore() ?: 0) < HIGH_QUALITY_WORD_SYNC_SCORE) {
-                coroutineScope {
-                    val lyricsPlus = async { preciseLyricsClient.findPrecise(request) }
-                    val lrclib = async { lyricsFallbackClient.find(request) }
-                    lyricsPlus.await()?.let { candidates += "LyricsPlus" to it }
-                    candidates += "LRCLIB" to lrclib.await()
-                }
-                selected = candidates.bestDisplayableLyrics()
-            }
-
-            // Plain text is deliberately last: a timed result from LRCLIB is
-            // preferable even when its individual word windows are estimated.
-            if (selected == null) {
-                plainLyricsClient.find(request)
-                    ?.takeIf { it.hasDisplayableLyrics() }
-                    ?.let { selected = "Lyrics.ovh" to it }
-            }
-
-            val source = selected?.first ?: "none"
-            val duetReference = candidates
-                .firstOrNull { (candidateSource, _) -> candidateSource == "Apple Music" }
-                ?.second
-            val finalResult = (selected?.second ?: LyricsState(LyricsStatus.NOT_FOUND))
-                .withDuetAlignmentFrom(duetReference)
-                .withRepairedWordTimings(duration)
+            val finalResult = (appleResult ?: LyricsState(LyricsStatus.NOT_FOUND))
+                // Apple line-synced lyrics remain line-synced. Do not invent
+                // word timings when the source does not publish them.
+                .withRepairedWordTimings(trackDurationMs = duration)
                 .withStableDuetAlignment()
             log(
-                "Lyrics: $source ${finalResult.status} " +
-                    "(${finalResult.lines.size} timed lines, score=${finalResult.wordTimingQualityScore()})"
+                "Lyrics: Apple Music ${finalResult.status} " +
+                    "(${finalResult.lines.size} timed lines, " +
+                    "score=${finalResult.wordTimingQualityScore(duration)})"
             )
             synchronized(this@AirPlayService) {
                 if (lyricsKey == key) _lyrics.value = finalResult
             }
         }
-    }
-
-    private fun List<Pair<String, LyricsState>>.bestDisplayableLyrics():
-        Pair<String, LyricsState>? = asSequence()
-        .filter { (_, lyrics) -> lyrics.hasDisplayableLyrics() }
-        .maxByOrNull { (_, lyrics) -> lyrics.wordTimingQualityScore() }
-
-    private fun LyricsState.hasDisplayableLyrics(): Boolean = when (status) {
-        LyricsStatus.SYNCED,
-        LyricsStatus.PLAIN,
-        LyricsStatus.INSTRUMENTAL,
-        -> true
-        else -> false
     }
 
     fun togglePlayPause() {
@@ -1325,7 +1334,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
         private const val AUDIO_PAUSE_WATCHDOG_INTERVAL_MS = 250L
         private const val AUDIO_PAUSE_SILENCE_MS = 1_800L
+        private const val LYRICS_SEARCH_WINDOW_MS = 7_500L
         private const val MAX_RETAINED_COVER_BYTES = 2 * 1024 * 1024
-        private const val HIGH_QUALITY_WORD_SYNC_SCORE = 2_200
     }
 }
