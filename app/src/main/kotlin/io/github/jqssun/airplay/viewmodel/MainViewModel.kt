@@ -18,6 +18,7 @@ import io.github.jqssun.airplay.audio.DacpQueueState
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.renderer.AudioMeterLevels
+import io.github.jqssun.airplay.renderer.isAiVocalSeparationSupported
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -69,6 +70,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val remoteArtworkLoader = RemoteArtworkLoader()
     private var service: AirPlayService? = null
     val dacpPlayer: Player? get() = service?.dacpPlayer
+    val aiVocalSeparationSupported: Boolean = isAiVocalSeparationSupported()
 
     fun audioVolumeUp() {
         setAppVolume((_appVolume.value + APP_VOLUME_STEP).coerceAtMost(100))
@@ -195,6 +197,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     )
     val karaokeVocalLevel: StateFlow<Int> = _karaokeVocalLevel.asStateFlow()
 
+    private val _aiVocalSeparation = MutableStateFlow(
+        aiVocalSeparationSupported &&
+            prefs.getBoolean(
+                Prefs.AI_VOCAL_SEPARATION,
+                Prefs.DEF_AI_VOCAL_SEPARATION,
+            )
+    )
+    val aiVocalSeparation: StateFlow<Boolean> = _aiVocalSeparation.asStateFlow()
+
     private val _resolution = MutableStateFlow(prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!)
     val resolution: StateFlow<String> = _resolution.asStateFlow()
 
@@ -220,6 +231,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.getBoolean(Prefs.MOTION_ARTWORK_ENABLED, Prefs.DEF_MOTION_ARTWORK_ENABLED)
     )
     val motionArtworkEnabled: StateFlow<Boolean> = _motionArtworkEnabled.asStateFlow()
+
+    private val _fullscreenMotionArtwork = MutableStateFlow(
+        prefs.getBoolean(
+            Prefs.FULLSCREEN_MOTION_ARTWORK,
+            Prefs.DEF_FULLSCREEN_MOTION_ARTWORK,
+        )
+    )
+    val fullscreenMotionArtwork: StateFlow<Boolean> = _fullscreenMotionArtwork.asStateFlow()
 
     private val _lyricsVisible = MutableStateFlow(
         prefs.getBoolean(Prefs.LYRICS_VISIBLE, Prefs.DEF_LYRICS_VISIBLE)
@@ -355,8 +374,13 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _animatedArtworkUrl = MutableStateFlow<String?>(null)
     val animatedArtworkUrl: StateFlow<String?> = _animatedArtworkUrl.asStateFlow()
+    private val _animatedArtworkFullScreenUrl = MutableStateFlow<String?>(null)
+    val animatedArtworkFullScreenUrl: StateFlow<String?> =
+        _animatedArtworkFullScreenUrl.asStateFlow()
     private val _animatedArtworkCover = MutableStateFlow<Bitmap?>(null)
     val animatedArtworkCover: StateFlow<Bitmap?> = _animatedArtworkCover.asStateFlow()
+    private val _animatedArtworkPreview = MutableStateFlow<Bitmap?>(null)
+    val animatedArtworkPreview: StateFlow<Bitmap?> = _animatedArtworkPreview.asStateFlow()
     private var animatedArtworkKey = ""
     private var animatedArtworkJob: Job? = null
 
@@ -512,6 +536,12 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.edit().putInt(Prefs.KARAOKE_VOCAL_LEVEL, value).apply()
         service?.setKaraokeMode(_karaokeEnabled.value, value)
     }
+    fun setAiVocalSeparation(v: Boolean) {
+        val enabled = v && aiVocalSeparationSupported
+        _aiVocalSeparation.value = enabled
+        prefs.edit().putBoolean(Prefs.AI_VOCAL_SEPARATION, enabled).apply()
+        service?.setAiVocalSeparationEnabled(enabled)
+    }
     fun adjustKaraokeVocalLevel(delta: Int) {
         if (!_karaokeEnabled.value) setKaraokeEnabled(true)
         setKaraokeVocalLevel(_karaokeVocalLevel.value + delta)
@@ -533,8 +563,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             animatedArtworkJob = null
             animatedArtworkKey = ""
             _animatedArtworkUrl.value = null
+            _animatedArtworkFullScreenUrl.value = null
             _animatedArtworkCover.value = null
+            _animatedArtworkPreview.value = null
         }
+    }
+    fun setFullscreenMotionArtwork(v: Boolean) {
+        _fullscreenMotionArtwork.value = v
+        prefs.edit().putBoolean(Prefs.FULLSCREEN_MOTION_ARTWORK, v).apply()
     }
     fun setLyricsVisible(v: Boolean) {
         _lyricsVisible.value = v
@@ -571,6 +607,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         svc.setAppVolume(_appVolume.value)
         svc.setSpatialEnhancementEnabled(_spatialEnhancement.value)
         svc.setKaraokeMode(_karaokeEnabled.value, _karaokeVocalLevel.value)
+        svc.setAiVocalSeparationEnabled(_aiVocalSeparation.value)
         updateFromService()
     }
 
@@ -580,7 +617,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         animatedArtworkJob = null
         animatedArtworkKey = ""
         _animatedArtworkUrl.value = null
+        _animatedArtworkFullScreenUrl.value = null
         _animatedArtworkCover.value = null
+        _animatedArtworkPreview.value = null
         queueArtworkJob?.cancel()
         queueArtworkJob = null
         queueArtworkKey = ""
@@ -854,7 +893,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         animatedArtworkKey = key
         animatedArtworkJob?.cancel()
         _animatedArtworkUrl.value = null
+        _animatedArtworkFullScreenUrl.value = null
         _animatedArtworkCover.value = null
+        _animatedArtworkPreview.value = null
         if (track.title.isBlank() || track.artist.isBlank()) return
 
         animatedArtworkJob = viewModelScope.launch {
@@ -868,9 +909,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             )
             if (animatedArtworkKey != key) return@launch
             _animatedArtworkUrl.value = result?.motionUrl
+            _animatedArtworkFullScreenUrl.value = result?.fullScreenMotionUrl
 
             val staticCover = result?.staticArtworkUrl?.let { remoteArtworkLoader.load(it) }
             if (animatedArtworkKey == key) _animatedArtworkCover.value = staticCover
+
+            val preview = result?.motionPreviewUrl?.let {
+                remoteArtworkLoader.load(it, targetEdgePx = 960)
+            }
+            if (animatedArtworkKey == key) _animatedArtworkPreview.value = preview
         }
     }
 

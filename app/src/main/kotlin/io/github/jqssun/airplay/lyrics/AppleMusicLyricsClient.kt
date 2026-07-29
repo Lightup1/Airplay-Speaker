@@ -2,6 +2,7 @@ package io.github.jqssun.airplay.lyrics
 
 import io.github.jqssun.airplay.BuildConfig
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -69,24 +70,18 @@ class AppleMusicLyricsClient {
             .flatMap { rankTrackIds(it, request) }
             .distinct()
             .take(MAX_LYRICS_CANDIDATES)
-        if (candidateIds.isEmpty()) return@coroutineScope null
 
-        val candidates = candidateIds
-            .map { trackId ->
-                async {
-                    requestText(
-                        "$LYRICS_URL" + query("id" to trackId.toString(), "v" to "2"),
-                        maxBytes = MAX_LYRICS_BYTES,
-                        readTimeoutMs = LYRICS_READ_TIMEOUT_MS,
-                    )?.let { parseResponse(it, trackId) }
-                }
-            }
-            .awaitAll()
-
-        val selectedIndex = candidates.indexOfFirst { it != null }
-        if (selectedIndex < 0) return@coroutineScope null
-        val trackId = candidateIds[selectedIndex]
-        val resolved = candidates[selectedIndex] ?: return@coroutineScope null
+        // Try candidates in ranking order. Launching every duplicate at once
+        // made one slow or broken regional ID cancel a valid Apple result.
+        // The best match normally succeeds first, so avoid touching lower
+        // ranked duplicates unless the preferred candidate has no lyrics.
+        val directResult = resolveLyricsCandidates(candidateIds)
+        // Generic titles can be omitted from iTunes search results even while
+        // their Apple Music page still exists. Resolve the album catalogue and
+        // inspect its full track list as a second, exact metadata path.
+        val (trackId, resolved) = directResult
+            ?: resolveLyricsCandidates(findAlbumCandidateIds(request))
+            ?: return@coroutineScope null
         val writerCredit = withTimeoutOrNull(CREDITS_TIMEOUT_MS) {
             requestText(
                 "$APPLE_MUSIC_SONG_URL/$trackId",
@@ -99,6 +94,71 @@ class AppleMusicLyricsClient {
             ?.let(::parseWriterCredit)
             .orEmpty()
         resolved.copy(writerCredit = writerCredit)
+    }
+
+    private suspend fun resolveLyricsCandidates(
+        candidateIds: List<Long>,
+    ): Pair<Long, LyricsState>? = resolveFirstCandidate(
+        candidateIds.distinct().take(MAX_LYRICS_CANDIDATES),
+    ) { candidateId ->
+        requestText(
+            "$LYRICS_URL" + query("id" to candidateId.toString(), "v" to "2"),
+            maxBytes = MAX_LYRICS_BYTES,
+            readTimeoutMs = LYRICS_READ_TIMEOUT_MS,
+        )?.let { parseResponse(it, candidateId) }
+    }
+
+    private suspend fun findAlbumCandidateIds(request: LyricsRequest): List<Long> {
+        if (request.album.isBlank() || request.artist.isBlank()) return emptyList()
+        return coroutineScope {
+            val albumSearchResponses = albumSearchRequests(request)
+                .map { searchRequest ->
+                    async {
+                        requestText(
+                            buildString {
+                                append(ITUNES_SEARCH_URL)
+                                append(query(
+                                    "term" to searchRequest.term,
+                                    "media" to "music",
+                                    "entity" to "song",
+                                    "country" to searchRequest.country,
+                                    "limit" to SEARCH_RESULT_LIMIT.toString(),
+                                ))
+                            },
+                            maxBytes = MAX_SEARCH_BYTES,
+                        )
+                    }
+                }
+                .awaitAll()
+                .filterNotNull()
+            val collectionIds = albumSearchResponses
+                .flatMap { rankCollectionIds(it, request) }
+                .distinct()
+                .take(MAX_ALBUM_CANDIDATES)
+            if (collectionIds.isEmpty()) return@coroutineScope emptyList()
+
+            collectionIds
+                .flatMap { collectionId ->
+                    SEARCH_COUNTRIES.map { country -> collectionId to country }
+                }
+                .map { (collectionId, country) ->
+                    async {
+                        requestText(
+                            ITUNES_LOOKUP_URL + query(
+                                "id" to collectionId.toString(),
+                                "entity" to "song",
+                                "country" to country,
+                            ),
+                            maxBytes = MAX_SEARCH_BYTES,
+                        )
+                    }
+                }
+                .awaitAll()
+                .filterNotNull()
+                .flatMap { rankTrackIds(it, request) }
+                .distinct()
+                .take(MAX_LYRICS_CANDIDATES)
+        }
     }
 
     private data class SearchRequest(
@@ -114,6 +174,16 @@ class AppleMusicLyricsClient {
                 }
             }
         }.distinct().take(MAX_SEARCH_REQUESTS)
+    }
+
+    private fun albumSearchRequests(request: LyricsRequest): List<SearchRequest> {
+        return buildList {
+            SEARCH_COUNTRIES.forEach { country ->
+                albumSearchTerms(request).forEach { term ->
+                    add(SearchRequest(term = term, country = country))
+                }
+            }
+        }.distinct().take(MAX_ALBUM_SEARCH_REQUESTS)
     }
 
     private fun requestText(
@@ -136,6 +206,8 @@ class AppleMusicLyricsClient {
             if (connection.responseCode !in 200..299) return null
             if (connection.contentLengthLong > maxBytes) return null
             connection.inputStream.use { it.readBoundedUtf8(maxBytes) }
+        } catch (_: IOException) {
+            null
         } finally {
             connection.disconnect()
         }
@@ -165,6 +237,7 @@ class AppleMusicLyricsClient {
 
     companion object {
         private const val ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
+        private const val ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup"
         private const val LYRICS_URL = "https://lyrics.paxsenix.org/apple-music/lyrics"
         private const val APPLE_MUSIC_SONG_URL = "https://music.apple.com/th/song"
         private val USER_AGENT =
@@ -180,6 +253,8 @@ class AppleMusicLyricsClient {
         private const val CACHE_ENTRIES = 12
         private const val SEARCH_RESULT_LIMIT = 50
         private const val MAX_SEARCH_REQUESTS = 6
+        private const val MAX_ALBUM_SEARCH_REQUESTS = 6
+        private const val MAX_ALBUM_CANDIDATES = 3
         private const val MAX_LYRICS_CANDIDATES = 5
         private const val MAX_LINES = 750
         private const val MAX_WORDS_PER_LINE = 160
@@ -218,6 +293,23 @@ class AppleMusicLyricsClient {
 
         internal fun selectTrackId(value: String, request: LyricsRequest): Long? {
             return rankTrackIds(value, request).firstOrNull()
+        }
+
+        internal suspend fun <T : Any> resolveFirstCandidate(
+            candidateIds: List<Long>,
+            resolver: suspend (Long) -> T?,
+        ): Pair<Long, T>? {
+            for (candidateId in candidateIds) {
+                val resolved = try {
+                    resolver(candidateId)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                if (resolved != null) return candidateId to resolved
+            }
+            return null
         }
 
         internal fun rankTrackIds(value: String, request: LyricsRequest): List<Long> {
@@ -290,6 +382,40 @@ class AppleMusicLyricsClient {
                 .distinct()
         }
 
+        internal fun rankCollectionIds(value: String, request: LyricsRequest): List<Long> {
+            val results = runCatching { JSONObject(value).optJSONArray("results") }.getOrNull()
+                ?: return emptyList()
+            val wantedAlbum = normalize(request.album)
+            val wantedArtist = normalize(request.artist)
+            val wantedPrimaryArtist = normalize(primarySearchArtist(request.artist))
+            if (wantedAlbum.isBlank()) return emptyList()
+
+            val ranked = mutableListOf<Pair<Long, Int>>()
+            for (index in 0 until results.length()) {
+                val item = results.optJSONObject(index) ?: continue
+                val album = normalize(item.optString("collectionName"))
+                val artist = normalize(item.optString("artistName"))
+                val primaryArtist = normalize(primarySearchArtist(item.optString("artistName")))
+                val albumScore = matchScore(album, wantedAlbum)
+                val artistScore = maxOf(
+                    matchScore(artist, wantedArtist),
+                    matchScore(primaryArtist, wantedPrimaryArtist),
+                )
+                if (albumScore <= 0 || artistScore <= 0) continue
+                val collectionId = item.optLong("collectionId", -1L)
+                if (collectionId > 0L) {
+                    ranked += collectionId to (albumScore * 2 + artistScore)
+                }
+            }
+            return ranked
+                .sortedWith(
+                    compareByDescending<Pair<Long, Int>> { it.second }
+                        .thenBy { it.first },
+                )
+                .map { it.first }
+                .distinct()
+        }
+
         private fun matchScore(candidate: String, wanted: String): Int {
             if (wanted.isBlank()) return 1
             if (candidate == wanted) return 180
@@ -324,6 +450,17 @@ class AppleMusicLyricsClient {
                 "$primaryArtist $cleanTitle".trim(),
                 "$cleanTitle $primaryArtist".trim(),
                 cleanTitle,
+            ).filter { it.isNotBlank() }
+        }
+
+        internal fun albumSearchTerms(request: LyricsRequest): List<String> {
+            val album = request.album.trim()
+            val artist = request.artist.trim()
+            val primaryArtist = primarySearchArtist(artist)
+            return linkedSetOf(
+                "$artist $album".trim(),
+                "$primaryArtist $album".trim(),
+                "$album $primaryArtist".trim(),
             ).filter { it.isNotBlank() }
         }
 

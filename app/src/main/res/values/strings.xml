@@ -139,6 +139,8 @@
     <string name="setting_idle_preview_desc">Show video surface while waiting for a connection</string>
     <string name="setting_motion_artwork">Animated album artwork</string>
     <string name="setting_motion_artwork_desc">Enable moving artwork and album motion effects when available</string>
+    <string name="setting_fullscreen_motion_artwork">Full-screen motion artwork</string>
+    <string name="setting_fullscreen_motion_artwork_desc">Fill the player background with moving artwork; turn off to keep the classic animated cover</string>
     <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
     <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
     <string name="setting_keep_screen_on">Keep screen on</string>
@@ -176,6 +178,9 @@
     <string name="setting_spatial_enhancement_desc">Widen stereo sound with lightweight in-app processing. This is not Dolby Atmos.</string>
     <string name="setting_karaoke_mode">Smart Karaoke / Vocal Focus</string>
     <string name="setting_karaoke_mode_desc">Detect and reduce stereo-centred lead vocals while protecting bass, stereo ambience, upper detail and sharp instrument attacks. Press OK on the lyrics screen to adjust the vocal level.</string>
+    <string name="setting_ai_vocal_separation">AI Vocal Separation (Experimental)</string>
+    <string name="setting_ai_vocal_separation_desc">Use an on-device UVR MDX-Net model to isolate the real vocal stem. Adds about 6–10 seconds of latency and automatically returns to Smart Vocal Focus if this TV cannot keep up.</string>
+    <string name="setting_ai_vocal_separation_unsupported_desc">This 32-bit TV cannot run UVR MDX-Net in real time. Smart Vocal Focus remains available without AI.</string>
     <string name="setting_sw_alac">Software ALAC decoder</string>
     <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
     <string name="setting_aac">AAC audio</string>

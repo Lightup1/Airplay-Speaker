@@ -1,5 +1,7 @@
 package io.github.jqssun.airplay.lyrics
 
+import java.io.IOException
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -102,6 +104,37 @@ class AppleMusicLyricsClientTest {
     }
 
     @Test
+    fun returnsThePreferredLyricsWithoutRequestingABrokenDuplicate() = runBlocking {
+        val requested = mutableListOf<Long>()
+
+        val result = AppleMusicLyricsClient.resolveFirstCandidate(
+            listOf(908_544_388L, 910_881_256L),
+        ) { trackId ->
+            requested += trackId
+            if (trackId == 908_544_388L) "73 synced lines" else {
+                error("The lower-ranked duplicate must not be requested")
+            }
+        }
+
+        assertEquals(908_544_388L, result?.first)
+        assertEquals("73 synced lines", result?.second)
+        assertEquals(listOf(908_544_388L), requested)
+    }
+
+    @Test
+    fun continuesToTheNextCandidateWhenThePreferredRequestFails() = runBlocking {
+        val result = AppleMusicLyricsClient.resolveFirstCandidate(
+            listOf(11L, 12L),
+        ) { trackId ->
+            if (trackId == 11L) throw IOException("Provider failure")
+            "fallback lyrics"
+        }
+
+        assertEquals(12L, result?.first)
+        assertEquals("fallback lyrics", result?.second)
+    }
+
+    @Test
     fun matchesFeaturedArtistsAndVersionSuffixesFromAirplayMetadata() {
         val response = """
             {
@@ -140,6 +173,55 @@ class AppleMusicLyricsClientTest {
         assertTrue(terms.contains("Nova Bloom Northern Lights"))
         assertTrue(terms.contains("Northern Lights Nova Bloom"))
         assertTrue(terms.contains("Northern Lights"))
+    }
+
+    @Test
+    fun findsAnAlbumCollectionEvenWhenSearchOmitsTheRequestedTrack() {
+        val siblingSearchResponse = """
+            {
+              "results": [
+                {"collectionId":908544384,"trackId":908544386,
+                 "trackName":"Action Cat","artistName":"Gerard Way",
+                 "collectionName":"Hesitant Alien","trackTimeMillis":187000},
+                {"collectionId":908544384,"trackId":908544388,
+                 "trackName":"Brother","artistName":"Gerard Way",
+                 "collectionName":"Hesitant Alien","trackTimeMillis":270580}
+              ]
+            }
+        """.trimIndent()
+        val request = LyricsRequest("No Shows", "Gerard Way", "Hesitant Alien", 252_329L)
+
+        val collectionIds = AppleMusicLyricsClient.rankCollectionIds(
+            siblingSearchResponse,
+            request,
+        )
+        val albumTerms = AppleMusicLyricsClient.albumSearchTerms(request)
+
+        assertEquals(listOf(908_544_384L), collectionIds)
+        assertTrue(albumTerms.contains("Gerard Way Hesitant Alien"))
+    }
+
+    @Test
+    fun selectsAnOmittedSongFromTheFullAlbumLookup() {
+        val albumLookupResponse = """
+            {
+              "results": [
+                {"wrapperType":"collection","collectionId":908544384,
+                 "artistName":"Gerard Way","collectionName":"Hesitant Alien"},
+                {"wrapperType":"track","collectionId":908544384,
+                 "trackId":908544387,"trackName":"No Shows",
+                 "artistName":"Gerard Way","collectionName":"Hesitant Alien",
+                 "trackTimeMillis":252329}
+              ]
+            }
+        """.trimIndent()
+
+        val ids = AppleMusicLyricsClient.rankTrackIds(
+            albumLookupResponse,
+            LyricsRequest("No Shows", "Gerard Way", "Hesitant Alien", 252_329L),
+        )
+
+        assertEquals(listOf(908_544_387L), ids)
     }
 
     @Test

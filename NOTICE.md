@@ -1,6 +1,6 @@
 # Airplay Speaker — Open-source notice
 
-Airplay Speaker 2.0.0 is a modified distribution of **AirPlay Receiver for
+Airplay Speaker 3.0.0 is a modified distribution of **AirPlay Receiver for
 Android** by jqssun:
 
 - Project: https://github.com/jqssun/android-airplay-server
@@ -18,6 +18,15 @@ components. Their license files and source trees are retained in
 - Apple ALAC reference decoder — Apache License 2.0
 - libplist — GNU LGPL 2.1 or later
 - openssl-cmake / OpenSSL build integration — licenses retained in its source
+- Google AI Edge LiteRT — Apache License 2.0
+
+The optional on-device AI Vocal Separation mode includes the
+`UVR_MDXNET_9482.fp16acc.tflite` model. Its MIT license and attribution are
+bundled at
+`app/src/main/assets/licenses/UVR-MDX-LiteRT-LICENSE.txt`. The feature is
+disabled by default, runs only on supported 64-bit Android TV devices, and
+falls back to the lightweight Smart Vocal Focus processor when real-time
+inference is unavailable.
 
 Lyrics are retrieved at runtime only from the Apple Music lyric source. The
 application sends the current track title, artist, album, and duration solely

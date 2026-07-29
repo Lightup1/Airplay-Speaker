@@ -40,9 +40,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val losslessOutput by viewModel.losslessOutput.collectAsState()
     val spatialEnhancement by viewModel.spatialEnhancement.collectAsState()
     val karaokeEnabled by viewModel.karaokeEnabled.collectAsState()
+    val aiVocalSeparation by viewModel.aiVocalSeparation.collectAsState()
     val resolution by viewModel.resolution.collectAsState()
     val idlePreview by viewModel.idlePreview.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
+    val fullscreenMotionArtwork by viewModel.fullscreenMotionArtwork.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
@@ -200,6 +202,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
         )
 
         SettingSwitch(
+            title = stringResource(R.string.setting_fullscreen_motion_artwork),
+            description = stringResource(R.string.setting_fullscreen_motion_artwork_desc),
+            checked = fullscreenMotionArtwork,
+            onCheckedChange = { viewModel.setFullscreenMotionArtwork(it) },
+            enabled = motionArtworkEnabled,
+        )
+
+        SettingSwitch(
             title = stringResource(R.string.setting_auto_fullscreen),
             description = stringResource(R.string.setting_auto_fullscreen_desc),
             checked = autoFullscreen,
@@ -263,6 +273,20 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_karaoke_mode_desc),
             checked = karaokeEnabled,
             onCheckedChange = viewModel::setKaraokeEnabled,
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_ai_vocal_separation),
+            description = stringResource(
+                if (viewModel.aiVocalSeparationSupported) {
+                    R.string.setting_ai_vocal_separation_desc
+                } else {
+                    R.string.setting_ai_vocal_separation_unsupported_desc
+                }
+            ),
+            checked = aiVocalSeparation,
+            onCheckedChange = viewModel::setAiVocalSeparation,
+            enabled = viewModel.aiVocalSeparationSupported,
         )
 
         SettingSwitch(
@@ -596,14 +620,26 @@ private fun SettingSwitch(
     title: String,
     description: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     ListItem(
         modifier = Modifier
             .dpadFocus(RectangleShape)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+            ),
         headlineContent = { Text(title) },
         supportingContent = { Text(description) },
-        trailingContent = { Switch(checked = checked, onCheckedChange = null) }
+        trailingContent = {
+            Switch(
+                checked = checked,
+                enabled = enabled,
+                onCheckedChange = null,
+            )
+        }
     )
 }
