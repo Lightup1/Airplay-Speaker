@@ -52,8 +52,8 @@ These notes compare v2.5.0 with the previous GitHub release, v2.0.0.
 
 - GitHub repository: `l3kza08/Airplay-Speaker`
 - Android application ID: `com.airplayspeaker.tv`
-- App, website, download links, documentation, demo assets, and HTTP identity:
-  `Airplay Speaker`
+- App, launcher icon resource, website, download links, documentation, demo
+  assets, and HTTP identity: `Airplay Speaker`
 
 ## Package
 
@@ -61,8 +61,8 @@ These notes compare v2.5.0 with the previous GitHub release, v2.0.0.
 - Version code: 250
 - Version name: 2.5.0
 - APK: `Airplay-Speaker-v2.5.0.apk`
-- APK size: `45,130,863 bytes` (43.0 MiB)
-- SHA-256: `a8d8e06d69a2b2fbb71b4b9ed406011a16275abe45bda8d651d8870d949b809b`
+- APK size: `46,237,221 bytes` (44.1 MiB)
+- SHA-256: `2bb761ed115652a9dfce6b9646c6b016baf6abc69e49ffeff39c44dbd7750424`
 - Development-signed APK
 
 Because v2.5 has a new application ID, it can initially coexist with an older

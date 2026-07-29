@@ -400,7 +400,7 @@ private fun TvNavigationRail(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(R.drawable.sonic_app_icon),
+                painter = painterResource(R.drawable.airplay_speaker_icon),
                 contentDescription = stringResource(R.string.app_name),
                 tint = Color.Unspecified,
                 modifier = Modifier.size(38.dp),
