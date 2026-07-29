@@ -50,6 +50,7 @@ class AudioRenderer {
     private var outputChannels = 2
     private var failedCt = -1
     private var swAlacHandle = 0L  // software ALAC decoder handle
+    private val audioLevelAnalyzer = PcmAudioLevelAnalyzer()
     private val spatialEnhancer = StereoSpatialEnhancer()
     private val vocalReducer = StereoVocalReducer()
     private var outputSampleRate = 44100
@@ -82,6 +83,7 @@ class AudioRenderer {
                 cachedOutputQueueMs = 0L
                 outputQueueSampleAtMs = 0L
                 outputQueueEstimateInitialized = false
+                audioLevelAnalyzer.reset()
                 it.play()
             } catch (e: IllegalStateException) {
                 Log.w(TAG, "Unable to flush PCM output", e)
@@ -356,6 +358,13 @@ class AudioRenderer {
         if (spatialEnhancementEnabled) {
             spatialEnhancer.processInPlace(data, outputChannels)
         }
+        audioLevelAnalyzer.analyzePcm16(
+            pcm = data,
+            channels = outputChannels,
+            sampleRate = outputSampleRate,
+            gain = effectiveTrackVolume(),
+            capturedAtMs = SystemClock.elapsedRealtime(),
+        )
         var offset = 0
         while (offset < data.size) {
             val written = output.write(
@@ -405,6 +414,14 @@ class AudioRenderer {
         outputQueueEstimateInitialized = true
         return estimate
     }
+
+    /**
+     * Returns low, middle and high band energy from the PCM currently reaching
+     * this app's AudioTrack. A stale stream reports silence instead of leaving
+     * the Now Playing indicator moving after playback has stopped.
+     */
+    fun audioMeterLevels(): AudioMeterLevels =
+        audioLevelAnalyzer.snapshot(SystemClock.elapsedRealtime())
 
     fun setVolume(vol: Float) {
         // max: 0; min: -30; mute: -144
@@ -488,6 +505,7 @@ class AudioRenderer {
         cachedOutputQueueMs = 0L
         outputQueueSampleAtMs = 0L
         outputQueueEstimateInitialized = false
+        audioLevelAnalyzer.reset()
         vocalReducer.reset()
         failedCt = -1
         codecLabel = ""

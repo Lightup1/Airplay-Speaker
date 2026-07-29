@@ -1,5 +1,6 @@
 package io.github.jqssun.airplay.artwork
 
+import io.github.jqssun.airplay.BuildConfig
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
@@ -152,8 +153,9 @@ class AppleMusicArtworkClient {
     companion object {
         private const val ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
         private const val APPLE_MUSIC_ALBUM_URL = "https://music.apple.com/th/album"
-        private const val USER_AGENT =
-            "AirplaySpeaker/2.0.0 (https://github.com/l3kza08/Sonic-Cast)"
+        private val USER_AGENT =
+            "AirplaySpeaker/${BuildConfig.VERSION_NAME} " +
+                "(https://github.com/l3kza08/Airplay-Speaker)"
 
         private val motionDictionaryPattern = Regex(
             """motionDetailSquare.{0,16000}?\"video\"\s*:\s*\{.{0,6000}?\"url\"\s*:\s*\"([^\"]+?\.m3u8[^\"]*)\"""",

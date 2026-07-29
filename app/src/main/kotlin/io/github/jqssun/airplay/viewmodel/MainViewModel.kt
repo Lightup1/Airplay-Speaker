@@ -17,6 +17,7 @@ import io.github.jqssun.airplay.artwork.RemoteArtworkLoader
 import io.github.jqssun.airplay.audio.DacpQueueState
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.lyrics.LyricsState
+import io.github.jqssun.airplay.renderer.AudioMeterLevels
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -97,6 +98,18 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             activeService.currentPositionMs()
         } else {
             _audioPositionMs.value
+        }
+    }
+
+    fun sampleAudioMeterLevels(): AudioMeterLevels {
+        val activeService = service
+        return if (
+            activeService?.audioOnly?.value == true &&
+            activeService.playing.value
+        ) {
+            activeService.audioRenderer.audioMeterLevels()
+        } else {
+            AudioMeterLevels.Silent
         }
     }
 

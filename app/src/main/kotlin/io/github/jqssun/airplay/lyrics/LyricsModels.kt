@@ -38,6 +38,9 @@ data class LyricLine(
 
 enum class WordSyncMode {
     NONE,
+    /** Apple publishes timestamps for each full lyric row, but not each word. */
+    LINE,
+    /** Apple publishes a complete syllable/word timeline for at least one vocal part. */
     ENHANCED,
 }
 

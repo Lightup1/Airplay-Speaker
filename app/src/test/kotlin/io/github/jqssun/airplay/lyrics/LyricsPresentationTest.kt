@@ -61,13 +61,33 @@ class LyricsPresentationTest {
     @Test
     fun liveLineBreathesWithoutChangingItsRestingLayout() {
         assertEquals(1f, lyricHighlightGlyphScale(0f, 1_200L), 0.001f)
-        assertTrue(lyricHighlightGlyphScale(0.5f, 1_200L) > 1.02f)
+        assertTrue(lyricHighlightGlyphScale(0.5f, 1_200L) > 1.04f)
         assertEquals(1f, lyricHighlightGlyphScale(1f, 1_200L), 0.001f)
         assertTrue(
             lyricHighlightGlyphScale(0.5f, 1_200L) >
                 lyricHighlightGlyphScale(0.5f, 300L)
         )
-        assertEquals(1.14f, lyricHighlightGlyphScale(0.5f, 2_000L), 0.001f)
+        assertEquals(1.018f, lyricHighlightGlyphScale(0.5f, 300L), 0.001f)
+        assertEquals(1.08f, lyricHighlightGlyphScale(0.5f, 2_000L), 0.001f)
+    }
+
+    @Test
+    fun movingAuraDoesNotBlinkAtGraphemeBoundaries() {
+        val boundary = lyricHighlightHeadAura(
+            graphemeProgress = 0f,
+            wordProgress = 0.5f,
+            durationMs = 520L,
+        )
+        val crest = lyricHighlightHeadAura(
+            graphemeProgress = 0.5f,
+            wordProgress = 0.5f,
+            durationMs = 520L,
+        )
+
+        assertTrue(boundary >= 0.57f)
+        assertTrue(crest > boundary)
+        assertEquals(0f, lyricHighlightHeadAura(0.5f, 0f, 520L), 0.001f)
+        assertEquals(0f, lyricHighlightHeadAura(0.5f, 1f, 520L), 0.001f)
     }
 
     @Test
@@ -123,6 +143,30 @@ class LyricsPresentationTest {
     }
 
     @Test
+    fun progressiveSliceDoesNotSpendTimingOnTheInvisibleTrailingSpace() {
+        val slice = progressiveTextSlice("go ", 0.999f)
+
+        assertEquals(1, slice.solidEnd)
+        assertEquals(2, slice.blendEnd)
+        assertTrue(slice.blendEnd < "go ".length)
+    }
+
+    @Test
+    fun graphemeRangesKeepEmojiFamiliesAndFlagsTogether() {
+        val family = "👨‍👩‍👧‍👦"
+        val flag = "🇹🇭"
+
+        assertEquals(
+            LyricHighlightGraphemeRange(0, family.length),
+            lyricHighlightGraphemeRange("$family!", 0, 0.1f),
+        )
+        assertEquals(
+            LyricHighlightGraphemeRange(0, flag.length),
+            lyricHighlightGraphemeRange("${flag}X", 0, 0.1f),
+        )
+    }
+
+    @Test
     fun incompleteWordTimelineFallsBackToTheCompleteSourceLine() {
         val complete = listOf(
             LyricWord("Don't ", 1_000, 1_300),
@@ -142,6 +186,42 @@ class LyricsPresentationTest {
         )
 
         assertTrue(lyricWordsMatchLine("Don’t stop!", words))
+    }
+
+    @Test
+    fun wordMatchingPreservesMeaningfulThaiAndIndicMarks() {
+        assertTrue(
+            lyricWordsMatchLine(
+                "ฉันรักเธอ",
+                listOf(LyricWord("ฉันรักเธอ", 1_000L, 2_000L)),
+            )
+        )
+        assertTrue(
+            !lyricWordsMatchLine(
+                "กา",
+                listOf(LyricWord("ก่า", 1_000L, 2_000L)),
+            )
+        )
+    }
+
+    @Test
+    fun inactiveAndLiveRowsUseTheSameWordTimedLayoutString() {
+        val words = listOf(
+            LyricWord("Don’t ", 1_000L, 1_400L),
+            LyricWord("stop!", 1_400L, 1_900L),
+        )
+
+        assertEquals(
+            "Don’t stop!",
+            wordTimedLyricLayoutText("Don't stop", words),
+        )
+        assertEquals(
+            "Complete source text",
+            wordTimedLyricLayoutText(
+                text = "Complete source text",
+                words = listOf(LyricWord("Incomplete", 1_000L, 1_500L)),
+            ),
+        )
     }
 
 }

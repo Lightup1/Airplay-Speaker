@@ -28,11 +28,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.soniccast.tv"
+        applicationId = "com.airplayspeaker.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 200
-        versionName = "2.0.0"
+        versionCode = 250
+        versionName = "2.5.0"
         ndk {
             abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }

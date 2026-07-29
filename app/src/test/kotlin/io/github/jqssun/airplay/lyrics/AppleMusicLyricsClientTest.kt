@@ -79,6 +79,70 @@ class AppleMusicLyricsClientTest {
     }
 
     @Test
+    fun keepsAlternateAppleTracksSoALyriclessFirstMatchCanFallBack() {
+        val response = """
+            {
+              "results": [
+                {"trackId":11,"trackName":"Stay","artistName":"Example Artist",
+                 "collectionName":"Stay - Single","trackTimeMillis":201000},
+                {"trackId":12,"trackName":"Stay (Remastered 2024)","artistName":"Example Artist",
+                 "collectionName":"The Album","trackTimeMillis":202500},
+                {"trackId":13,"trackName":"Stay (Live)","artistName":"Example Artist",
+                 "collectionName":"Live at Home","trackTimeMillis":286000}
+              ]
+            }
+        """.trimIndent()
+
+        val ids = AppleMusicLyricsClient.rankTrackIds(
+            response,
+            LyricsRequest("Stay", "Example Artist", "The Album", 202_000L),
+        )
+
+        assertEquals(listOf(12L, 11L, 13L), ids)
+    }
+
+    @Test
+    fun matchesFeaturedArtistsAndVersionSuffixesFromAirplayMetadata() {
+        val response = """
+            {
+              "results": [
+                {"trackId":42,"trackName":"Northern Lights - Remastered 2025",
+                 "artistName":"Nova Bloom & Mira Lane",
+                 "collectionName":"Northern Lights","trackTimeMillis":224000}
+              ]
+            }
+        """.trimIndent()
+
+        val id = AppleMusicLyricsClient.selectTrackId(
+            response,
+            LyricsRequest(
+                "Northern Lights (Remastered Version)",
+                "Nova Bloom feat. Mira Lane",
+                "Northern Lights",
+                224_300L,
+            ),
+        )
+
+        assertEquals(42L, id)
+    }
+
+    @Test
+    fun createsCleanSearchFallbacksForFeaturedAndRemasteredMetadata() {
+        val terms = AppleMusicLyricsClient.searchTerms(
+            LyricsRequest(
+                "Northern Lights (Remastered Version)",
+                "Nova Bloom feat. Mira Lane",
+                "Northern Lights",
+                224_300L,
+            ),
+        )
+
+        assertTrue(terms.contains("Nova Bloom Northern Lights"))
+        assertTrue(terms.contains("Northern Lights Nova Bloom"))
+        assertTrue(terms.contains("Northern Lights"))
+    }
+
+    @Test
     fun aSingleAgentLabelDoesNotPushTheWholeSongToTheRight() {
         val response = """
             {
@@ -141,7 +205,103 @@ class AppleMusicLyricsClientTest {
         assertEquals(LyricsStatus.SYNCED, state?.status)
         assertTrue(state?.lines?.all { it.words.isEmpty() } == true)
         assertTrue(state?.lines?.none { it.exactWordTiming } == true)
-        assertEquals(WordSyncMode.NONE, state?.wordSyncMode)
+        assertEquals(WordSyncMode.LINE, state?.wordSyncMode)
+    }
+
+    @Test
+    fun lineSyncTypeDoesNotTreatAWholeRowTokenAsWordByWord() {
+        val response = """
+            {
+              "syncType":"Line",
+              "lyrics":[
+                {
+                  "timestamp":19000,
+                  "endtime":23748,
+                  "text":[
+                    {
+                      "text":"Take away the sensation inside",
+                      "timestamp":19000,
+                      "endtime":23748
+                    }
+                  ]
+                },
+                {
+                  "timestamp":25030,
+                  "endtime":29152,
+                  "text":[
+                    {
+                      "text":"Bittersweet",
+                      "timestamp":25030,
+                      "endtime":27000
+                    },
+                    {
+                      "text":"migraine in my head",
+                      "timestamp":27000,
+                      "endtime":29152
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 207192831L)
+
+        assertEquals(LyricsStatus.SYNCED, state?.status)
+        assertEquals(WordSyncMode.LINE, state?.wordSyncMode)
+        assertEquals(
+            listOf(
+                "Take away the sensation inside",
+                "Bittersweet migraine in my head",
+            ),
+            state?.lines?.map { it.text },
+        )
+        assertTrue(state?.lines?.all { it.words.isEmpty() } == true)
+        assertTrue(state?.lines?.none { it.exactWordTiming } == true)
+    }
+
+    @Test
+    fun explicitSyllableSyncKeepsEvenASingleTimedWord() {
+        val response = """
+            {
+              "syncType":"Syllable",
+              "lyrics":[
+                {
+                  "timestamp":1000,
+                  "endtime":1800,
+                  "text":[
+                    {"text":"Hey","timestamp":1000,"endtime":1800}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 1L)
+
+        assertEquals(WordSyncMode.ENHANCED, state?.wordSyncMode)
+        assertTrue(state?.lines?.single()?.exactWordTiming == true)
+        assertEquals(1, state?.lines?.single()?.words?.size)
+    }
+
+    @Test
+    fun ttmlClockStringsRemainLineSynced() {
+        val response = """
+            {
+              "lyrics": [
+                {"timestamp":"00:01.250","endtime":"00:03.000","text":"First timed row"},
+                {"timestamp":"3.5s","endtime":"PT5.25S","text":"Second timed row"}
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 1L)
+
+        assertEquals(LyricsStatus.SYNCED, state?.status)
+        assertEquals(WordSyncMode.LINE, state?.wordSyncMode)
+        assertEquals(listOf(1_250L, 3_500L), state?.lines?.map { it.timeMs })
+        assertEquals(listOf(3_000L, 5_250L), state?.lines?.map { it.endMs })
+        assertTrue(state?.lines?.all { it.words.isEmpty() } == true)
     }
 
     @Test
@@ -158,6 +318,7 @@ class AppleMusicLyricsClientTest {
         val state = AppleMusicLyricsClient.parseResponse(response, 1L)
 
         assertEquals(LyricsStatus.PLAIN, state?.status)
+        assertEquals(WordSyncMode.NONE, state?.wordSyncMode)
         assertEquals("First plain line\nSecond plain line", state?.plainLyrics)
         assertTrue(state?.lines?.isEmpty() == true)
     }
@@ -214,6 +375,86 @@ class AppleMusicLyricsClientTest {
         assertTrue(line?.words?.isEmpty() == true)
         assertEquals("small voice", line?.backgroundText)
         assertEquals("small voice", line?.backgroundWords?.joinToString("") { it.text })
+    }
+
+    @Test
+    fun missingSyllableEndsUseTheNextOnsetAndPublishedLineEnd() {
+        val response = """
+            {
+              "lyrics": [
+                {
+                  "timestamp":1000,
+                  "endtime":2800,
+                  "text":[
+                    {"text":"Sing","timestamp":1000},
+                    {"text":"it","timestamp":1600},
+                    {"text":"smooth","timestamp":2100}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val words = AppleMusicLyricsClient.parseResponse(response, 1L)
+            ?.lines
+            ?.single()
+            ?.words
+            .orEmpty()
+
+        assertEquals(listOf(1_600L, 2_100L, 2_800L), words.map { it.endMs })
+        assertTrue(words.all { it.endMs - it.startMs >= 500L })
+    }
+
+    @Test
+    fun tokenSpacingFollowsTheWritingSystemAndExplicitProviderSpaces() {
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("ฉัน", "รัก"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("你", "好"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("あ", "い"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("ຂ້ອຍ", "ຮັກ"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("ស្រឡាញ់", "អ្នក"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("မင်္ဂလာ", "ပါ"))
+
+        // Korean, Arabic, Cyrillic and Latin normally retain inter-word spaces.
+        assertEquals(" ", AppleMusicLyricsClient.separatorAfter("나는", "너를"))
+        assertEquals(" ", AppleMusicLyricsClient.separatorAfter("أنا", "أحبك"))
+        assertEquals(" ", AppleMusicLyricsClient.separatorAfter("я", "тебя"))
+        assertEquals(" ", AppleMusicLyricsClient.separatorAfter("love", "you"))
+
+        // Existing spaces and attached punctuation must never be doubled.
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("love ", "you"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("love", " you"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("hello", ","))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("don", "'t"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("ca", "n't"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("rock-", "and"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("你", "「"))
+        assertEquals("", AppleMusicLyricsClient.separatorAfter("，", "好"))
+    }
+
+    @Test
+    fun thaiWordTimingKeepsNaturalCompactSpacing() {
+        val response = """
+            {
+              "lyrics": [
+                {
+                  "timestamp":1000,
+                  "endtime":3000,
+                  "text":[
+                    {"text":"ฉัน","timestamp":1000,"endtime":1500},
+                    {"text":"รัก","timestamp":1500,"endtime":2000},
+                    {"text":"เธอ ","timestamp":2000,"endtime":2500},
+                    {"text":"มาก","timestamp":2500,"endtime":3000}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val line = AppleMusicLyricsClient.parseResponse(response, 1L)?.lines?.single()
+
+        assertEquals("ฉันรักเธอ มาก", line?.text)
+        assertEquals("ฉันรักเธอ มาก", line?.words?.joinToString("") { it.text })
+        assertTrue(line?.exactWordTiming == true)
     }
 
     @Test
