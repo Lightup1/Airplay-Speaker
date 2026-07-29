@@ -22,6 +22,56 @@ class AppleMusicArtworkClientTest {
     }
 
     @Test
+    fun parsesAppleMusicDirectVideoAndPrefersWideFlavorForTv() {
+        val html = """
+            {"videoArtwork":{"dictionary":{
+              "motionDetailSquare":{
+                "previewFrame":{"url":"https://is1-ssl.mzstatic.com/frame/{w}x{h}bb.{f}"},
+                "video":"https://mvod.itunes.apple.com/path/square.m3u8"
+              },
+              "motionMediumVideo16x9":{
+                "previewFrame":{"url":"https://is2-ssl.mzstatic.com/wide/{w}x{h}bb.{f}"},
+                "video":"https://mvod.itunes.apple.com/path/wide.m3u8"
+              }
+            }}}
+        """.trimIndent()
+
+        val result = AppleMusicArtworkClient.parseMotionArtwork(html)
+
+        assertEquals(
+            "https://mvod.itunes.apple.com/path/square.m3u8",
+            result?.squareUrl,
+        )
+        assertEquals(
+            "https://mvod.itunes.apple.com/path/wide.m3u8",
+            result?.fullScreenUrl,
+        )
+        assertEquals(
+            "https://is1-ssl.mzstatic.com/frame/1280x1280bb.jpg",
+            result?.previewFrameUrl,
+        )
+    }
+
+    @Test
+    fun emptyWideFlavorCannotBorrowSquareVideo() {
+        val html = """
+            {"videoArtwork":{"dictionary":{
+              "motionWideVideo21x9":{},
+              "motionDetailSquare":{
+                "video":"https://mvod.itunes.apple.com/path/square-only.m3u8"
+              }
+            }}}
+        """.trimIndent()
+
+        val result = AppleMusicArtworkClient.parseMotionArtwork(html)
+
+        assertEquals(
+            "https://mvod.itunes.apple.com/path/square-only.m3u8",
+            result?.fullScreenUrl,
+        )
+    }
+
+    @Test
     fun fallsBackToAmbientArtworkElement() {
         val html = """
             <div data-testid="video-artwork">

@@ -8,6 +8,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import io.github.jqssun.airplay.BuildConfig
 
 /**
  * Small shared disk cache for looping animated artwork.
@@ -26,7 +27,7 @@ internal object MotionArtworkCache {
     fun mediaSourceFactory(context: Context): DefaultMediaSourceFactory {
         val appContext = context.applicationContext
         val upstream = DefaultHttpDataSource.Factory()
-            .setUserAgent("Airplay-Speaker/2.0.0")
+            .setUserAgent("Airplay-Speaker/${BuildConfig.VERSION_NAME}")
             .setConnectTimeoutMs(HTTP_TIMEOUT_MS)
             .setReadTimeoutMs(HTTP_TIMEOUT_MS)
             .setAllowCrossProtocolRedirects(true)

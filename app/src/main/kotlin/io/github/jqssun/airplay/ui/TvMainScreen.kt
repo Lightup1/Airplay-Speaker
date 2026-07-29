@@ -1,7 +1,6 @@
 package io.github.jqssun.airplay.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -161,16 +160,15 @@ private fun TvIdleScreen(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(idleFocus)
-            .focusable()
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(Color(0xFF18232B), Color(0xFF070B10)),
-                    radius = 1_050f,
-                )
-            ),
+            .focusable(),
     ) {
         val scale = minOf(maxWidth.value / 960f, maxHeight.value / 540f)
             .coerceIn(0.78f, 1.8f)
+
+        LiquidGlassAmbientBackdrop(
+            modifier = Modifier.fillMaxSize(),
+            accent = if (ready) Color(0xFF72D7FF) else Color(0xFFFF8F9C),
+        )
 
         IconButton(
             onClick = onSettings,
@@ -178,6 +176,11 @@ private fun TvIdleScreen(
                 .align(Alignment.TopEnd)
                 .padding(top = (20f * scale).dp, end = (24f * scale).dp)
                 .size((43f * scale).dp)
+                .liquidGlass(
+                    shape = CircleShape,
+                    tint = foreground,
+                    strength = 0.72f,
+                )
                 .dpadFocus(CircleShape),
         ) {
             Icon(
@@ -234,11 +237,15 @@ private fun TvIdleScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape((3f * scale).dp))
-                        .background(Color(0xFF7E888E).copy(alpha = if (ready) 0.72f else 0.42f))
+                        .liquidGlass(
+                            shape = RoundedCornerShape((16f * scale).dp),
+                            selected = ready,
+                            tint = if (ready) Color(0xFF8EE6FF) else Color(0xFFFF9BA6),
+                            strength = if (ready) 0.94f else 0.74f,
+                        )
                         .padding(
-                            horizontal = (17f * scale).dp,
-                            vertical = (13f * scale).dp,
+                            horizontal = (20f * scale).dp,
+                            vertical = (16f * scale).dp,
                         ),
                 ) {
                     Text(
@@ -346,14 +353,12 @@ private fun TvSettingsScreen(
         runCatching { backFocus.requestFocus() }
     }
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    listOf(Color(0xFF090A0E), Color(0xFF11141A), Color(0xFF08090D))
-                )
-            ),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        LiquidGlassAmbientBackdrop(
+            modifier = Modifier.fillMaxSize(),
+            accent = Color(0xFF78C9FF),
+        )
         TvSettingsPanel(
             viewModel = viewModel,
             modifier = Modifier.padding(start = 58.dp),
@@ -365,6 +370,11 @@ private fun TvSettingsScreen(
                 .padding(start = 22.dp, top = 25.dp)
                 .size(50.dp)
                 .focusRequester(backFocus)
+                .liquidGlass(
+                    shape = CircleShape,
+                    tint = Color(0xFFB5E6FF),
+                    strength = 0.8f,
+                )
                 .dpadFocus(CircleShape),
         ) {
             Icon(
@@ -388,15 +398,22 @@ private fun TvNavigationRail(
         modifier = Modifier
             .width(116.dp)
             .fillMaxHeight()
-            .background(Color(0xA608090D))
+            .liquidGlass(
+                shape = RoundedCornerShape(topEnd = 30.dp, bottomEnd = 30.dp),
+                tint = Color(0xFF83CFFF),
+                strength = 0.82f,
+            )
             .padding(horizontal = 13.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             modifier = Modifier
                 .size(48.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(Color(0x14FFFFFF)),
+                .liquidGlass(
+                    shape = RoundedCornerShape(15.dp),
+                    tint = Color(0xFFBCE9FF),
+                    strength = 0.72f,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -432,8 +449,16 @@ private fun TvNavigationRail(
 
         Column(
             modifier = Modifier
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color(0x0FFFFFFF))
+                .liquidGlass(
+                    shape = RoundedCornerShape(18.dp),
+                    selected = state == ServerState.RUNNING,
+                    tint = if (state == ServerState.RUNNING) {
+                        Color(0xFF9EF2D0)
+                    } else {
+                        Color(0xFFFF8A8A)
+                    },
+                    strength = 0.66f,
+                )
                 .padding(horizontal = 10.dp, vertical = 11.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -470,14 +495,6 @@ private fun TvNavItem(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val background by animateColorAsState(
-        when {
-            focused -> Color(0x20FFFFFF)
-            selected -> Color(0x12FFFFFF)
-            else -> Color.Transparent
-        },
-        label = "tvNavBackground",
-    )
     val scale by animateFloatAsState(if (focused) 1.035f else 1f, label = "tvNavScale")
     val contentColor = if (focused || selected) Color(0xFFF2F3F5) else Color(0xFF858791)
 
@@ -486,12 +503,12 @@ private fun TvNavItem(
             .fillMaxWidth()
             .height(72.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(20.dp))
-            .background(background)
-            .border(
-                width = if (focused) 2.dp else 0.dp,
-                color = if (focused) Color(0xFF9EF2D0) else Color.Transparent,
+            .liquidGlass(
                 shape = RoundedCornerShape(20.dp),
+                focused = focused,
+                selected = selected,
+                tint = if (selected) Color(0xFF9EF2D0) else Color(0xFF91D7FF),
+                strength = if (focused || selected) 0.82f else 0.54f,
             )
             .onFocusChanged { focused = it.isFocused }
             .clickable(role = Role.Button, onClick = onClick)
@@ -580,13 +597,12 @@ private fun TvReceiverHome(
                     modifier = Modifier
                         .weight(1.6f)
                         .fillMaxHeight()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(Color(0xFF1B2023), Color(0xFF121519), Color(0xFF0E1013))
-                            )
+                        .liquidGlass(
+                            shape = RoundedCornerShape(24.dp),
+                            selected = state == ServerState.RUNNING,
+                            tint = mint,
+                            strength = 0.92f,
                         )
-                        .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(22.dp))
                         .padding(30.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -663,9 +679,11 @@ private fun TvReceiverHome(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(Color(0xB3121518))
-                    .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(22.dp))
+                    .liquidGlass(
+                        shape = RoundedCornerShape(24.dp),
+                        tint = Color(0xFF8ACDFF),
+                        strength = 0.86f,
+                    )
                     .padding(26.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -704,9 +722,11 @@ private fun TvFeatureChip(text: String) {
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color(0x12FFFFFF))
-            .border(1.dp, Color(0x18FFFFFF), RoundedCornerShape(50))
+            .liquidGlass(
+                shape = RoundedCornerShape(50),
+                tint = Color(0xFF9EF2D0),
+                strength = 0.56f,
+            )
             .padding(horizontal = 12.dp, vertical = 8.dp),
     )
 }
@@ -717,8 +737,11 @@ private fun TvConnectStep(number: String, text: String) {
         Box(
             modifier = Modifier
                 .size(38.dp)
-                .clip(CircleShape)
-                .background(Color(0x18FFFFFF)),
+                .liquidGlass(
+                    shape = CircleShape,
+                    tint = Color(0xFF9EF2D0),
+                    strength = 0.62f,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Text(number, color = Color(0xFF9EF2D0), fontWeight = FontWeight.Black)
@@ -747,11 +770,13 @@ private fun TvSettingsPanel(
     val losslessOutput by viewModel.losslessOutput.collectAsState()
     val spatialEnhancement by viewModel.spatialEnhancement.collectAsState()
     val karaokeEnabled by viewModel.karaokeEnabled.collectAsState()
+    val aiVocalSeparation by viewModel.aiVocalSeparation.collectAsState()
     val allowNew by viewModel.allowNewConn.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
+    val fullscreenMotionArtwork by viewModel.fullscreenMotionArtwork.collectAsState()
 
     Column(
         modifier = modifier
@@ -802,6 +827,15 @@ private fun TvSettingsPanel(
                     stringResource(R.string.setting_motion_artwork_desc),
                     motionArtworkEnabled,
                     viewModel::setMotionArtworkEnabled,
+                )
+            }
+            item {
+                TvSettingCard(
+                    title = stringResource(R.string.setting_fullscreen_motion_artwork),
+                    description = stringResource(R.string.setting_fullscreen_motion_artwork_desc),
+                    checked = fullscreenMotionArtwork,
+                    onCheckedChange = viewModel::setFullscreenMotionArtwork,
+                    enabled = motionArtworkEnabled,
                 )
             }
             item {
@@ -862,6 +896,21 @@ private fun TvSettingsPanel(
             }
             item {
                 TvSettingCard(
+                    title = stringResource(R.string.setting_ai_vocal_separation),
+                    description = stringResource(
+                        if (viewModel.aiVocalSeparationSupported) {
+                            R.string.setting_ai_vocal_separation_desc
+                        } else {
+                            R.string.setting_ai_vocal_separation_unsupported_desc
+                        }
+                    ),
+                    checked = aiVocalSeparation,
+                    onCheckedChange = viewModel::setAiVocalSeparation,
+                    enabled = viewModel.aiVocalSeparationSupported,
+                )
+            }
+            item {
+                TvSettingCard(
                     stringResource(R.string.setting_sw_alac),
                     stringResource(R.string.setting_sw_alac_desc),
                     swAlac,
@@ -903,6 +952,23 @@ private fun TvSettingCard(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    TvSettingCard(
+        title = title,
+        description = description,
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        enabled = true,
+    )
+}
+
+@Composable
+private fun TvSettingCard(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean,
+) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.025f else 1f, label = "tvSettingScale")
     Row(
@@ -910,16 +976,22 @@ private fun TvSettingCard(
             .fillMaxWidth()
             .height(102.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (focused) Color(0xFF22272B) else Color(0xB3121518))
-            .border(
-                if (focused) 2.dp else 1.dp,
-                if (focused) Color(0xFF9EF2D0) else Color(0x1AFFFFFF),
-                RoundedCornerShape(18.dp),
+            .liquidGlass(
+                shape = RoundedCornerShape(20.dp),
+                focused = focused,
+                selected = checked,
+                tint = when {
+                    !enabled -> Color(0xFF7B8490)
+                    checked -> Color(0xFF9EF2D0)
+                    else -> Color(0xFF85CCFF)
+                },
+                strength = if (enabled) 0.84f else 0.54f,
             )
             .onFocusChanged { focused = it.isFocused }
-            .clickable(role = Role.Switch) { onCheckedChange(!checked) }
-            .focusable()
+            .clickable(enabled = enabled, role = Role.Switch) {
+                onCheckedChange(!checked)
+            }
+            .focusable(enabled)
             .padding(horizontal = 24.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -940,7 +1012,7 @@ private fun TvSettingCard(
             )
         }
         Spacer(Modifier.width(18.dp))
-        Switch(checked = checked, onCheckedChange = null)
+        Switch(checked = checked, enabled = enabled, onCheckedChange = null)
     }
 }
 
@@ -1002,9 +1074,11 @@ private fun TvDiagnosticsPanel(viewModel: MainViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xCC0D0F12))
-                .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(20.dp))
+                .liquidGlass(
+                    shape = RoundedCornerShape(22.dp),
+                    tint = Color(0xFF89D3FF),
+                    strength = 0.78f,
+                )
                 .padding(22.dp)
         ) {
             if (visibleLogs.isEmpty()) {

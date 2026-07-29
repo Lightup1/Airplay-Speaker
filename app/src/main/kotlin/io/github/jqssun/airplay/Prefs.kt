@@ -25,6 +25,7 @@ object Prefs {
     const val SPATIAL_ENHANCEMENT = "spatial_enhancement"; const val DEF_SPATIAL_ENHANCEMENT = false
     const val KARAOKE_ENABLED = "karaoke_enabled"; const val DEF_KARAOKE_ENABLED = false
     const val KARAOKE_VOCAL_LEVEL = "karaoke_vocal_level"; const val DEF_KARAOKE_VOCAL_LEVEL = 35
+    const val AI_VOCAL_SEPARATION = "ai_vocal_separation"; const val DEF_AI_VOCAL_SEPARATION = false
     const val APP_VOLUME = "app_volume"; const val DEF_APP_VOLUME = 100
     const val RESOLUTION = "resolution"; const val DEF_RESOLUTION = "auto"
     const val MAX_FPS = "max_fps"; const val DEF_MAX_FPS = 60
@@ -37,6 +38,7 @@ object Prefs {
     const val BENCHMARK_LOG = "benchmark_log"; const val DEF_BENCHMARK_LOG = false
     const val IDLE_PREVIEW = "idle_preview"; const val DEF_IDLE_PREVIEW = false
     const val MOTION_ARTWORK_ENABLED = "motion_artwork_enabled"; const val DEF_MOTION_ARTWORK_ENABLED = true
+    const val FULLSCREEN_MOTION_ARTWORK = "fullscreen_motion_artwork"; const val DEF_FULLSCREEN_MOTION_ARTWORK = true
     const val LYRICS_VISIBLE = "lyrics_visible"; const val DEF_LYRICS_VISIBLE = true
     const val AUTO_FULLSCREEN = "auto_fullscreen"; const val DEF_AUTO_FULLSCREEN = true
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true

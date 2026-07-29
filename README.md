@@ -14,13 +14,46 @@
   <img alt="Android TV 7.0+" src="https://img.shields.io/badge/Android%20TV-7.0%2B-3DDC84?logo=android&logoColor=white">
   <img alt="CD-quality audio" src="https://img.shields.io/badge/Audio-16--bit%20%2F%2044.1%20kHz-8B5CF6">
   <img alt="Kotlin and Compose" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white">
-  <img alt="Version 2.5.0" src="https://img.shields.io/badge/Version-2.5.0-ff765d">
+  <img alt="Version 3.0.0" src="https://img.shields.io/badge/Version-3.0.0-ff765d">
   <img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue">
 </p>
 
 Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. It plays lossless ALAC audio at CD quality, displays track metadata and album artwork, supports background playback and remote transport controls, and presents synchronized lyrics in a television-first 1920×1080 interface.
 
 **[Open the interactive website](https://l3kza08.github.io/airplay-speaker-web/)** · **[Download the latest APK](https://github.com/l3kza08/Airplay-Speaker/releases/latest)**
+
+## What’s new in v3.0.0
+
+Version 3.0 turns Now Playing into a cinematic, album-led television
+experience and adds the first experimental on-device AI vocal separator.
+These changes are cumulative since the previous GitHub release, v2.5.0.
+
+- **Cinematic full-screen motion artwork** — when Apple publishes moving
+  artwork for the matching album, the video becomes a dedicated left-hand
+  stage while lyrics remain readable in a separate glass panel. The original
+  cover layout remains available from Settings.
+- **Sharper 1080p-class presentation** — motion artwork can select square
+  renditions up to 1920×1920, avoids double resampling, and uses a restrained
+  display-synchronized drift instead of permanently enlarging every frame.
+- **Feathered artwork edges** — the movie stays sharp in the centre and blends
+  through a softly blurred still into the album-colour background, removing
+  the hard rectangular edge without starting a second video decoder.
+- **Liquid-glass television UI** — waiting, settings, track metadata, karaoke,
+  and lyric surfaces share lighter single-layer glass, calmer depth, and
+  consistent ten-foot focus states.
+- **Experimental AI Vocal Separation** — supported 64-bit TVs can use an
+  on-device UVR MDX-Net LiteRT model to isolate the vocal stem. GPU and CPU
+  acceleration are attempted safely; slower devices automatically return to
+  Smart Vocal Focus without interrupting the receiver.
+- **More resilient Apple lyrics** — bounded catalogue retries, strict
+  word/line/plain-text modes, multilingual shaping, independent backing
+  vocals, validated Duet placement, lyric browsing, and end credits remain
+  synchronized to audible output.
+- **Low-memory safeguards** — bounded artwork caching, a single motion decoder,
+  stable lyric measurement, and automatic AI fallback keep the normal
+  experience practical on 2 GB Android TV hardware.
+
+See [the complete v3.0.0 release notes](RELEASE_NOTES_v3.0.0.md).
 
 ## What’s new in v2.5.0
 
@@ -143,15 +176,17 @@ previous GitHub release, v1.0.0.
 
 <p align="center">
   <a href="docs/media/Airplay-Speaker-demo.mp4">
-    <img src="docs/media/Airplay-Speaker-demo-poster.jpg" alt="Airplay Speaker running on Android TV" width="100%">
+    <img src="docs/media/Airplay-Speaker-demo-poster.jpg" alt="Airplay Speaker 3.0 running on Android TV" width="100%">
   </a>
 </p>
 
 <p align="center">
-  <a href="docs/media/Airplay-Speaker-demo.mp4"><strong>▶ Watch the v0.14.8 15-second 1080p demo</strong></a>
+  <a href="docs/media/Airplay-Speaker-demo.mp4"><strong>▶ Watch the v3.0.0 30-second 1080p film</strong></a>
 </p>
 
-> The v0.14.8 demo was captured from a real Android TV at 1920×1080 and 59.94 FPS. The recording has no audio.
+> The v3.0.0 film was captured directly from a real Android TV at 1920×1080.
+> It shows full-screen motion artwork, feathered album edges, live lyrics, and
+> the centred track badge. The recording has no audio.
 
 ## Highlights
 
@@ -205,14 +240,13 @@ previous GitHub release, v1.0.0.
 
 ```bash
 adb connect <ANDROID_TV_IP>:5555
-adb install Airplay-Speaker-v2.5.0.apk
+adb install Airplay-Speaker-v3.0.0.apk
 ```
 
 The application appears in the Android TV app launcher as **Airplay Speaker**.
 
-> Version 2.5 uses the fully rebranded `com.airplayspeaker.tv` application ID.
-> Remove the older application from Android TV settings once v2.5 is working.
-> Local settings from the legacy package are not migrated.
+> Version 3.0 keeps the `com.airplayspeaker.tv` application ID introduced in
+> v2.5, so it installs as an in-place update and retains existing settings.
 
 ## Use
 

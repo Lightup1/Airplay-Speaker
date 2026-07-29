@@ -107,7 +107,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
     private var foregroundStarted = false
 
     val videoRenderer = VideoRenderer()
-    val audioRenderer = AudioRenderer()
+    val audioRenderer by lazy { AudioRenderer(applicationContext) }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
     val videoDownloader by lazy { VideoDownloader(this) }
 
@@ -254,6 +254,12 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 Prefs.KARAOKE_VOCAL_LEVEL,
                 Prefs.DEF_KARAOKE_VOCAL_LEVEL,
             ),
+        )
+        audioRenderer.setAiVocalSeparationEnabled(
+            prefs.getBoolean(
+                Prefs.AI_VOCAL_SEPARATION,
+                Prefs.DEF_AI_VOCAL_SEPARATION,
+            )
         )
         createNotificationChannel()
         dacpController = DacpController(this)
@@ -492,6 +498,12 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 Prefs.KARAOKE_VOCAL_LEVEL,
                 Prefs.DEF_KARAOKE_VOCAL_LEVEL,
             ),
+        )
+        audioRenderer.setAiVocalSeparationEnabled(
+            prefs.getBoolean(
+                Prefs.AI_VOCAL_SEPARATION,
+                Prefs.DEF_AI_VOCAL_SEPARATION,
+            )
         )
         videoRenderer.enforceSdr = prefs.getBoolean(Prefs.ENFORCE_SDR, Prefs.DEF_ENFORCE_SDR)
         videoRenderer.keyAllowFrameDrop = prefs.getBoolean(Prefs.KEY_ALLOW_FRAME_DROP, Prefs.DEF_KEY_ALLOW_FRAME_DROP)
@@ -867,6 +879,14 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
             .edit()
             .putBoolean(Prefs.KARAOKE_ENABLED, enabled)
             .putInt(Prefs.KARAOKE_VOCAL_LEVEL, vocalLevel)
+            .apply()
+    }
+
+    fun setAiVocalSeparationEnabled(enabled: Boolean) {
+        audioRenderer.setAiVocalSeparationEnabled(enabled)
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Prefs.AI_VOCAL_SEPARATION, enabled)
             .apply()
     }
 
@@ -1335,7 +1355,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
         private const val AUDIO_PAUSE_WATCHDOG_INTERVAL_MS = 250L
         private const val AUDIO_PAUSE_SILENCE_MS = 1_800L
-        private const val LYRICS_SEARCH_WINDOW_MS = 7_500L
+        private const val LYRICS_SEARCH_WINDOW_MS = 20_000L
         private const val MAX_RETAINED_COVER_BYTES = 2 * 1024 * 1024
     }
 }

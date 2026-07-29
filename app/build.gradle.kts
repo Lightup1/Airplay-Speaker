@@ -31,8 +31,9 @@ android {
         applicationId = "com.airplayspeaker.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 250
-        versionName = "2.5.0"
+        versionCode = 300
+        versionName = "3.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
@@ -58,11 +59,16 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
 
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    androidResources {
+        noCompress += "tflite"
     }
 }
 
@@ -104,6 +110,7 @@ dependencies {
     implementation(libs.media3.ui.compose.material3)
     implementation(libs.media3.transformer)
     implementation(libs.kotlinx.coroutines)
+    implementation("com.google.ai.edge.litert:litert:2.1.6")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -119,4 +126,6 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20260522")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }

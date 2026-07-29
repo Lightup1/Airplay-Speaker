@@ -1,5 +1,6 @@
 package io.github.jqssun.airplay.renderer
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -41,10 +42,12 @@ internal fun smoothAudioQueueEstimate(
     return previousMs + delta.coerceIn(-maxFall, maxRise)
 }
 
-class AudioRenderer {
+class AudioRenderer(context: Context? = null) {
 
+    private val appContext = context?.applicationContext
     private var codec: MediaCodec? = null
     private var track: AudioTrack? = null
+    private val pcmWriteLock = Any()
     private var currentCt = -1
     private var currentPcmFormat: Triple<Int, Int, Int>? = null
     private var outputChannels = 2
@@ -53,6 +56,8 @@ class AudioRenderer {
     private val audioLevelAnalyzer = PcmAudioLevelAnalyzer()
     private val spatialEnhancer = StereoSpatialEnhancer()
     private val vocalReducer = StereoVocalReducer()
+    @Volatile
+    private var aiVocalSeparator: AiVocalSeparator? = null
     private var outputSampleRate = 44100
     @Volatile private var totalPcmBytesWritten = 0L
     @Volatile private var cachedOutputQueueMs = 0L
@@ -65,6 +70,7 @@ class AudioRenderer {
     @Volatile var spatialEnhancementEnabled = false; private set
     @Volatile var karaokeEnabled = false; private set
     @Volatile var karaokeVocalLevel = 35; private set
+    @Volatile var aiVocalSeparationEnabled = false; private set
     @Volatile var volume = 1.0f; private set
     @Volatile var appVolume = 1.0f; private set
     @Volatile var codecLabel = ""; private set
@@ -72,21 +78,27 @@ class AudioRenderer {
     private var baseOutputPathLabel = ""
     @Volatile private var pendingReset = false
 
-    fun markSessionEnded() { pendingReset = true }
+    fun markSessionEnded() {
+        aiVocalSeparator?.finish()
+        pendingReset = true
+    }
 
     fun flushPcm() {
-        track?.let {
-            try {
-                it.pause()
-                it.flush()
-                totalPcmBytesWritten = 0L
-                cachedOutputQueueMs = 0L
-                outputQueueSampleAtMs = 0L
-                outputQueueEstimateInitialized = false
-                audioLevelAnalyzer.reset()
-                it.play()
-            } catch (e: IllegalStateException) {
-                Log.w(TAG, "Unable to flush PCM output", e)
+        aiVocalSeparator?.reset()
+        synchronized(pcmWriteLock) {
+            track?.let {
+                try {
+                    it.pause()
+                    it.flush()
+                    totalPcmBytesWritten = 0L
+                    cachedOutputQueueMs = 0L
+                    outputQueueSampleAtMs = 0L
+                    outputQueueEstimateInitialized = false
+                    audioLevelAnalyzer.reset()
+                    it.play()
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Unable to flush PCM output", e)
+                }
             }
         }
     }
@@ -344,17 +356,54 @@ class AudioRenderer {
      * reached the PCM sink so packet boundaries cannot turn into audio loss.
      */
     private fun writePcm(data: ByteArray) {
-        val output = track ?: return
-        vocalReducer.processInPlace(
-            pcm = data,
-            channels = outputChannels,
-            sampleRate = outputSampleRate,
-            reduction = if (karaokeEnabled) {
-                1f - karaokeVocalLevel / 100f
-            } else {
-                0f
-            },
+        val reduction = if (karaokeEnabled) {
+            1f - karaokeVocalLevel / 100f
+        } else {
+            0f
+        }
+        val aiRequested = karaokeEnabled &&
+            aiVocalSeparationEnabled &&
+            outputChannels == 2 &&
+            outputSampleRate == MdxVocalChunkProcessor.SAMPLE_RATE
+        val separator = if (aiRequested) {
+            getOrCreateAiVocalSeparator()
+        } else {
+            aiVocalSeparator
+        }
+        val handledByAiPipeline = if (outputChannels == 2 &&
+            outputSampleRate == MdxVocalChunkProcessor.SAMPLE_RATE
+        ) {
+            separator?.offer(
+                pcm = data,
+                reduction = reduction,
+                aiRequested = aiRequested,
+            ) == true
+        } else {
+            false
+        }
+        if (handledByAiPipeline) return
+        processAndWritePcm(data, applyDspVocalReduction = karaokeEnabled)
+    }
+
+    private fun writeAiPcm(data: ByteArray, aiApplied: Boolean) {
+        processAndWritePcm(
+            data = data,
+            applyDspVocalReduction = karaokeEnabled && !aiApplied,
         )
+    }
+
+    private fun processAndWritePcm(
+        data: ByteArray,
+        applyDspVocalReduction: Boolean,
+    ) {
+        if (applyDspVocalReduction) {
+            vocalReducer.processInPlace(
+                pcm = data,
+                channels = outputChannels,
+                sampleRate = outputSampleRate,
+                reduction = 1f - karaokeVocalLevel / 100f,
+            )
+        }
         if (spatialEnhancementEnabled) {
             spatialEnhancer.processInPlace(data, outputChannels)
         }
@@ -365,21 +414,24 @@ class AudioRenderer {
             gain = effectiveTrackVolume(),
             capturedAtMs = SystemClock.elapsedRealtime(),
         )
-        var offset = 0
-        while (offset < data.size) {
-            val written = output.write(
-                data,
-                offset,
-                data.size - offset,
-                AudioTrack.WRITE_BLOCKING,
-            )
-            if (written <= 0) {
-                Log.e(TAG, "PCM write failed at $offset/${data.size}: $written")
-                pendingReset = true
-                return
+        synchronized(pcmWriteLock) {
+            val output = track ?: return
+            var offset = 0
+            while (offset < data.size) {
+                val written = output.write(
+                    data,
+                    offset,
+                    data.size - offset,
+                    AudioTrack.WRITE_BLOCKING,
+                )
+                if (written <= 0) {
+                    Log.e(TAG, "PCM write failed at $offset/${data.size}: $written")
+                    pendingReset = true
+                    return
+                }
+                totalPcmBytesWritten += written
+                offset += written
             }
-            totalPcmBytesWritten += written
-            offset += written
         }
     }
 
@@ -390,8 +442,10 @@ class AudioRenderer {
      */
     fun estimatedQueuedAudioMs(): Long {
         val now = SystemClock.elapsedRealtime()
+        val aiQueuedMs = aiVocalSeparator?.bufferedAudioMs() ?: 0L
         if (now - outputQueueSampleAtMs < OUTPUT_QUEUE_SAMPLE_INTERVAL_MS) {
-            return cachedOutputQueueMs
+            return (cachedOutputQueueMs + aiQueuedMs)
+                .coerceAtMost(MAX_TOTAL_REPORTED_QUEUE_MS)
         }
         val output = track ?: return 0L
         val frameBytes = outputChannels * Short.SIZE_BYTES
@@ -412,7 +466,8 @@ class AudioRenderer {
         cachedOutputQueueMs = estimate
         outputQueueSampleAtMs = now
         outputQueueEstimateInitialized = true
-        return estimate
+        return (estimate + aiQueuedMs)
+            .coerceAtMost(MAX_TOTAL_REPORTED_QUEUE_MS)
     }
 
     /**
@@ -469,13 +524,44 @@ class AudioRenderer {
         )
     }
 
+    fun setAiVocalSeparationEnabled(enabled: Boolean) {
+        aiVocalSeparationEnabled = enabled && isAiVocalSeparationSupported()
+        refreshOutputPathLabel()
+        Log.i(
+            TAG,
+            "AI Vocal Separation: " +
+                if (aiVocalSeparationEnabled) {
+                    "enabled"
+                } else if (enabled) {
+                    "unsupported on this 32-bit TV"
+                } else {
+                    "disabled"
+                },
+        )
+    }
+
+    @Synchronized
+    private fun getOrCreateAiVocalSeparator(): AiVocalSeparator? {
+        aiVocalSeparator?.let { return it }
+        val context = appContext ?: return null
+        return AiVocalSeparator(
+            context = context,
+            output = ::writeAiPcm,
+            onStatus = { refreshOutputPathLabel() },
+        ).also { aiVocalSeparator = it }
+    }
+
     private fun refreshOutputPathLabel() {
         if (baseOutputPathLabel.isBlank()) {
             outputPathLabel = ""
             return
         }
         val effects = buildList {
-            if (karaokeEnabled) add("Smart Vocal Focus $karaokeVocalLevel%")
+            if (karaokeEnabled && aiVocalSeparationEnabled) {
+                add(aiVocalSeparator?.statusLabel ?: "AI Vocal Separation unavailable")
+            } else if (karaokeEnabled) {
+                add("Smart Vocal Focus $karaokeVocalLevel%")
+            }
             if (spatialEnhancementEnabled) add("Spatial stereo")
         }
         outputPathLabel = if (effects.isEmpty()) {
@@ -489,8 +575,11 @@ class AudioRenderer {
         resolveTrackGain(volume, appVolume)
 
     fun stop() {
-        track?.let { try { it.stop(); it.release() } catch (_: Exception) {} }
-        track = null
+        aiVocalSeparator?.reset()
+        synchronized(pcmWriteLock) {
+            track?.let { try { it.stop(); it.release() } catch (_: Exception) {} }
+            track = null
+        }
         codec?.let { try { it.stop(); it.release() } catch (_: Exception) {} }
         codec = null
         if (swAlacHandle != 0L) {
@@ -513,10 +602,15 @@ class AudioRenderer {
         outputPathLabel = ""
     }
 
-    fun release() = stop()
+    fun release() {
+        stop()
+        aiVocalSeparator?.close()
+        aiVocalSeparator = null
+    }
 
     companion object {
         private const val MAX_REPORTED_OUTPUT_QUEUE_MS = 1_200L
+        private const val MAX_TOTAL_REPORTED_QUEUE_MS = 20_000L
         private const val OUTPUT_QUEUE_SAMPLE_INTERVAL_MS = 40L
         private const val TAG = "AudioRenderer"
         const val CT_ALAC = 2
