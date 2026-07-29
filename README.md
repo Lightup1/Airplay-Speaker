@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/l3kza08/Sonic-Cast/releases/latest">
+  <a href="https://github.com/l3kza08/Airplay-Speaker/releases/latest">
     <img alt="Download APK" src="https://img.shields.io/badge/Download-Latest%20APK-ff765d?style=for-the-badge&logo=android&logoColor=white">
   </a>
 </p>
@@ -14,13 +14,42 @@
   <img alt="Android TV 7.0+" src="https://img.shields.io/badge/Android%20TV-7.0%2B-3DDC84?logo=android&logoColor=white">
   <img alt="CD-quality audio" src="https://img.shields.io/badge/Audio-16--bit%20%2F%2044.1%20kHz-8B5CF6">
   <img alt="Kotlin and Compose" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white">
-  <img alt="Version 2.0.0" src="https://img.shields.io/badge/Version-2.0.0-ff765d">
+  <img alt="Version 2.5.0" src="https://img.shields.io/badge/Version-2.5.0-ff765d">
   <img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue">
 </p>
 
 Airplay Speaker turns an Android TV into a living-room AirPlay music receiver. It plays lossless ALAC audio at CD quality, displays track metadata and album artwork, supports background playback and remote transport controls, and presents synchronized lyrics in a television-first 1920×1080 interface.
 
-**[Open the interactive website](https://l3kza08.github.io/airplay-speaker-web/)** · **[Download the latest APK](https://github.com/l3kza08/Sonic-Cast/releases/latest)**
+**[Open the interactive website](https://l3kza08.github.io/airplay-speaker-web/)** · **[Download the latest APK](https://github.com/l3kza08/Airplay-Speaker/releases/latest)**
+
+## What’s new in v2.5.0
+
+Version 2.5 completes the Airplay Speaker rebrand and improves the live music
+presentation introduced in v2.0.0.
+
+- **Audio-reactive equalizer** — the indicator beside the title now reads the
+  decoded PCM stream and follows real low, middle, and high-frequency energy.
+  It settles to an idle baseline on pause, mute, or a stopped stream.
+- **Perfectly centred title** — the track title has its own symmetric viewport,
+  while the equalizer remains a separate fixed element beside it. Long titles
+  scroll without pulling the equalizer or shifting the text off centre.
+- **Strict Apple synchronization modes** — `Syllable` data enables
+  word-by-word karaoke, `Line` data highlights the complete active row, and
+  untimed lyrics remain readable plain text. A whole-row token can no longer be
+  misidentified as word timing.
+- **More reliable Apple lyric matching** — lookup retries cleaned title and
+  artist variants across Thai and US catalogues, then checks the best matching
+  Apple track alternatives when the first edition has no lyric payload.
+- **Multilingual lyric shaping** — Thai, Lao, Khmer, Myanmar, Chinese, and
+  Japanese tokens retain natural compact spacing; Korean, Arabic, Cyrillic,
+  Latin, punctuation, emoji, combining marks, and right-to-left text keep their
+  proper layout.
+- **Smoother karaoke presentation** — grapheme-safe fill, restrained sustained
+  aura, stable line measurement, and display-rate interpolation reduce shaking,
+  duplicated highlights, and delayed hand-offs.
+- **Airplay Speaker everywhere** — the Android application ID, repository,
+  download links, demo assets, network identity, documentation, and website now
+  use the Airplay Speaker name.
 
 ## What’s new in v2.0.0
 
@@ -113,13 +142,13 @@ previous GitHub release, v1.0.0.
 ## Demo
 
 <p align="center">
-  <a href="docs/media/SonicCastTV-demo.mp4">
-    <img src="docs/media/SonicCastTV-demo-poster.jpg" alt="Airplay Speaker running on Android TV" width="100%">
+  <a href="docs/media/Airplay-Speaker-demo.mp4">
+    <img src="docs/media/Airplay-Speaker-demo-poster.jpg" alt="Airplay Speaker running on Android TV" width="100%">
   </a>
 </p>
 
 <p align="center">
-  <a href="docs/media/SonicCastTV-demo.mp4"><strong>▶ Watch the v0.14.8 15-second 1080p demo</strong></a>
+  <a href="docs/media/Airplay-Speaker-demo.mp4"><strong>▶ Watch the v0.14.8 15-second 1080p demo</strong></a>
 </p>
 
 > The v0.14.8 demo was captured from a real Android TV at 1920×1080 and 59.94 FPS. The recording has no audio.
@@ -171,17 +200,19 @@ previous GitHub release, v1.0.0.
 
 ## Install
 
-1. Download the newest APK from [GitHub Releases](https://github.com/l3kza08/Sonic-Cast/releases/latest).
+1. Download the newest APK from [GitHub Releases](https://github.com/l3kza08/Airplay-Speaker/releases/latest).
 2. Install it with a USB drive, a file manager, or ADB:
 
 ```bash
 adb connect <ANDROID_TV_IP>:5555
-adb install -r Airplay-Speaker-v2.0.0.apk
+adb install Airplay-Speaker-v2.5.0.apk
 ```
 
 The application appears in the Android TV app launcher as **Airplay Speaker**.
 
-> The published APK uses a development signing key. Android may require the previous build to be uninstalled if that build was signed with a different key.
+> Version 2.5 uses the fully rebranded `com.airplayspeaker.tv` application ID.
+> Remove the older application from Android TV settings once v2.5 is working.
+> Local settings from the legacy package are not migrated.
 
 ## Use
 

@@ -1071,7 +1071,8 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 .withStableDuetAlignment()
             log(
                 "Lyrics: Apple Music ${finalResult.status} " +
-                    "(${finalResult.lines.size} timed lines, " +
+                    "(mode=${finalResult.wordSyncMode}, " +
+                    "${finalResult.lines.size} timed lines, " +
                     "score=${finalResult.wordTimingQualityScore(duration)})"
             )
             synchronized(this@AirPlayService) {

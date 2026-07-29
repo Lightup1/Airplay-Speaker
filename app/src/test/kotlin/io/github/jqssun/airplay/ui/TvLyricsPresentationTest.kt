@@ -3,11 +3,53 @@ package io.github.jqssun.airplay.ui
 import io.github.jqssun.airplay.lyrics.LyricLine
 import io.github.jqssun.airplay.lyrics.LyricWord
 import io.github.jqssun.airplay.lyrics.lyricWordsMatchLine
+import io.github.jqssun.airplay.renderer.AudioMeterLevels
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TvLyricsPresentationTest {
+
+    @Test
+    fun titleViewportReservesEqualSpaceSoTheTitleItselfStaysCentred() {
+        assertEquals(
+            180,
+            centeredTrackTitleViewportWidthPx(
+                naturalTitleWidthPx = 180,
+                availableWidthPx = 300,
+                equalizerAndGapPx = 20,
+            ),
+        )
+        assertEquals(
+            260,
+            centeredTrackTitleViewportWidthPx(
+                naturalTitleWidthPx = 480,
+                availableWidthPx = 300,
+                equalizerAndGapPx = 20,
+            ),
+        )
+    }
+
+    @Test
+    fun audioMeterDisplayAttacksAndReleasesWithoutOvershoot() {
+        val attack = smoothAudioMeterDisplay(
+            previous = AudioMeterLevels.Silent,
+            target = AudioMeterLevels(0.9f, 0.6f, 0.3f),
+            frameDeltaMs = 16L,
+        )
+        assertTrue(attack.low in 0f..0.9f)
+        assertTrue(attack.mid in 0f..0.6f)
+        assertTrue(attack.high in 0f..0.3f)
+
+        val release = smoothAudioMeterDisplay(
+            previous = attack,
+            target = AudioMeterLevels.Silent,
+            frameDeltaMs = 16L,
+        )
+        assertTrue(release.low in 0f..attack.low)
+        assertTrue(release.mid in 0f..attack.mid)
+        assertTrue(release.high in 0f..attack.high)
+    }
 
     @Test
     fun queueBrowsingTemporarilyOverridesButDoesNotDisableLyrics() {
@@ -70,6 +112,36 @@ class TvLyricsPresentationTest {
                 centerX = 50f,
                 centerY = 40f,
                 width = 100f,
+                height = 80f,
+            ),
+            0.001f,
+        )
+    }
+
+    @Test
+    fun activeGlyphGrowthIsBoundedByTheTextLayerEdges() {
+        assertEquals(
+            1f,
+            boundedLyricGlyphScale(
+                desiredScale = 1.14f,
+                left = 0f,
+                top = 10f,
+                right = 20f,
+                bottom = 40f,
+                width = 200f,
+                height = 80f,
+            ),
+            0.001f,
+        )
+        assertEquals(
+            1.14f,
+            boundedLyricGlyphScale(
+                desiredScale = 1.14f,
+                left = 80f,
+                top = 20f,
+                right = 120f,
+                bottom = 60f,
+                width = 200f,
                 height = 80f,
             ),
             0.001f,

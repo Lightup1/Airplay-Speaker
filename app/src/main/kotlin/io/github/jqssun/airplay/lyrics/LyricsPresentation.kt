@@ -79,19 +79,51 @@ internal fun lyricHighlightGlyphPulse(blendFraction: Float): Float {
 }
 
 /**
+ * Keeps the moving karaoke head luminous between adjacent graphemes.
+ *
+ * A raw sine pulse reaches zero every time the playhead crosses a character
+ * boundary. At display rate that reads as a tiny flicker. A restrained floor,
+ * softened by word-level attack and release envelopes, lets the aura glide
+ * continuously while still disappearing cleanly outside the active word.
+ */
+internal fun lyricHighlightHeadAura(
+    graphemeProgress: Float,
+    wordProgress: Float,
+    durationMs: Long,
+): Float {
+    val word = wordProgress.coerceIn(0f, 1f)
+    if (word <= 0f || word >= 1f) return 0f
+    fun smoothStep(value: Float): Float {
+        val clamped = value.coerceIn(0f, 1f)
+        return clamped * clamped * (3f - 2f * clamped)
+    }
+
+    val attack = smoothStep(word / 0.09f)
+    val release = smoothStep((1f - word) / 0.11f)
+    val wordEnvelope = minOf(attack, release)
+    val movingHead = 0.58f + lyricHighlightGlyphPulse(graphemeProgress) * 0.42f
+    val sustained = lyricSustainedWordAura(word, durationMs) * 0.82f
+    return maxOf(movingHead * wordEnvelope, sustained * wordEnvelope)
+        .coerceIn(0f, 1f)
+}
+
+/**
  * A paint-only scale for the grapheme under the playhead. It never changes
  * text measurement, so the live row can breathe without shaking or
- * re-wrapping. Longer words receive a slightly wider, slower pulse.
+ * re-wrapping. Every sung grapheme receives a subtle lift, while long held
+ * words can still reach the wider 14% breath used by the television design.
  */
 internal fun lyricHighlightGlyphScale(
     progress: Float,
     durationMs: Long,
 ): Float {
     if (progress <= 0f || progress >= 1f) return 1f
-    // Keep quick syllables steady. Sustained Apple-style words interpolate
-    // from no size change at one second to a 14% breath at two seconds.
-    val durationWeight = ((durationMs - 1_000L).toFloat() / 1_000f).coerceIn(0f, 1f)
-    val peakGrowth = durationWeight * 0.14f
+    val durationWeight = ((durationMs - 360L).toFloat() / 1_640f).coerceIn(0f, 1f)
+    // The lift must be visible from a ten-foot viewing distance without
+    // making adjacent glyphs appear to jostle. Apple-style karaoke relies
+    // more on luminance than geometry, so cap sustained notes at eight per
+    // cent and keep quick syllables below two per cent.
+    val peakGrowth = 0.018f + durationWeight * 0.062f
     return 1f + lyricHighlightGlyphPulse(progress) * peakGrowth
 }
 
@@ -112,13 +144,7 @@ internal fun lyricHighlightGraphemeRange(
 ): LyricHighlightGraphemeRange? {
     if (wordText.isEmpty() || wordStartOffset < 0) return null
     val boundaries = graphemeBoundaries(wordText)
-    var visibleClusters = (boundaries.size - 1).coerceAtLeast(0)
-    while (visibleClusters > 0) {
-        val start = boundaries[visibleClusters - 1]
-        val end = boundaries[visibleClusters]
-        if (wordText.substring(start, end).isNotBlank()) break
-        visibleClusters--
-    }
+    val visibleClusters = visibleGraphemeClusterCount(wordText, boundaries)
     if (visibleClusters <= 0) return null
     val clusterIndex = floor(visibleClusters * progress.coerceIn(0f, 0.999_999f))
         .toInt()
@@ -153,10 +179,30 @@ internal fun lyricWordsMatchLine(text: String, words: List<LyricWord>): Boolean 
     return normalizeLyricText(text) == normalizeLyricText(words.joinToString(separator = "") { it.text })
 }
 
+/**
+ * Uses one immutable string for both inactive and live word-timed rows.
+ * Switching between provider tokens and source text at line onset can change
+ * wrapping by a few pixels and make the whole lyric rail appear to shake.
+ */
+internal fun wordTimedLyricLayoutText(
+    text: String,
+    words: List<LyricWord>,
+): String = words
+    .takeIf { lyricWordsMatchLine(text, it) }
+    ?.joinToString(separator = "") { it.text }
+    ?: text
+
 private fun normalizeLyricText(value: String): String {
     val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT)
-    val searchable = normalized.filter { it.isLetterOrDigit() }
+    val searchable = normalized.filter { character ->
+        character.isLetterOrDigit() || when (Character.getType(character)) {
+            Character.NON_SPACING_MARK.toInt(),
+            Character.COMBINING_SPACING_MARK.toInt(),
+            Character.ENCLOSING_MARK.toInt() -> true
+            else -> false
+        }
+    }
     return searchable.ifBlank { normalized.filterNot(Char::isWhitespace) }
 }
 
@@ -170,7 +216,8 @@ internal fun progressivePrefixIndex(text: String, progress: Float): Int {
     if (progress >= 1f) return text.length
 
     val boundaries = graphemeBoundaries(text)
-    val clusterCount = (boundaries.size - 1).coerceAtLeast(1)
+    val clusterCount = visibleGraphemeClusterCount(text, boundaries)
+    if (clusterCount <= 0) return 0
     val completed = (clusterCount * progress).roundToInt().coerceIn(0, clusterCount)
     return boundaries.getOrElse(completed) { text.length }
 }
@@ -185,7 +232,8 @@ internal fun progressiveTextSlice(text: String, progress: Float): ProgressiveTex
     if (progress >= 1f) return ProgressiveTextSlice(text.length, text.length, 0f)
 
     val boundaries = graphemeBoundaries(text)
-    val clusterCount = (boundaries.size - 1).coerceAtLeast(1)
+    val clusterCount = visibleGraphemeClusterCount(text, boundaries)
+    if (clusterCount <= 0) return ProgressiveTextSlice(0, 0, 0f)
     val exact = clusterCount * progress.coerceIn(0f, 1f)
     val solidClusters = floor(exact).toInt().coerceIn(0, clusterCount)
     val blendClusters = (solidClusters + 1).coerceAtMost(clusterCount)
@@ -194,6 +242,27 @@ internal fun progressiveTextSlice(text: String, progress: Float): ProgressiveTex
         blendEnd = boundaries.getOrElse(blendClusters) { text.length },
         blendFraction = (exact - solidClusters).coerceIn(0f, 1f),
     )
+}
+
+private fun visibleGraphemeClusterCount(
+    text: String,
+    boundaries: IntArray,
+): Int {
+    var visibleClusters = (boundaries.size - 1).coerceAtLeast(0)
+    while (visibleClusters > 0) {
+        val start = boundaries[visibleClusters - 1]
+        val end = boundaries[visibleClusters]
+        var hasVisibleCharacter = false
+        for (index in start until end) {
+            if (!text[index].isWhitespace()) {
+                hasVisibleCharacter = true
+                break
+            }
+        }
+        if (hasVisibleCharacter) break
+        visibleClusters--
+    }
+    return visibleClusters
 }
 
 private fun graphemeBoundaries(text: String): IntArray {
@@ -212,9 +281,15 @@ private fun graphemeBoundaries(text: String): IntArray {
     boundaries[0] = 0
     var boundary = iterator.next()
     while (boundary != BreakIterator.DONE) {
-        if (size == boundaries.size) boundaries = boundaries.copyOf(boundaries.size * 2)
-        boundaries[size++] = boundary
+        if (!isUnsafeGraphemeBoundary(text, boundary)) {
+            if (size == boundaries.size) boundaries = boundaries.copyOf(boundaries.size * 2)
+            boundaries[size++] = boundary
+        }
         boundary = iterator.next()
+    }
+    if (boundaries[size - 1] != text.length) {
+        if (size == boundaries.size) boundaries = boundaries.copyOf(boundaries.size * 2)
+        boundaries[size++] = text.length
     }
     val result = boundaries.copyOf(size)
     if (text.length <= CACHEABLE_GRAPHEME_TEXT_LENGTH) {
@@ -226,3 +301,44 @@ private fun graphemeBoundaries(text: String): IntArray {
     }
     return result
 }
+
+/**
+ * java.text.BreakIterator implementations differ across Android releases.
+ * Filter the boundaries that would split modern emoji/variation sequences so
+ * the same lyric paints correctly on both API 24 and current televisions.
+ */
+private fun isUnsafeGraphemeBoundary(text: String, index: Int): Boolean {
+    if (index <= 0 || index >= text.length) return false
+    val before = text.codePointBefore(index)
+    val after = text.codePointAt(index)
+    if (before == ZERO_WIDTH_JOINER || after == ZERO_WIDTH_JOINER) return true
+    if (after.isUnicodeGraphemeExtension()) return true
+    if (before == '\r'.code && after == '\n'.code) return true
+    if (before.isRegionalIndicator() && after.isRegionalIndicator()) {
+        var regionalCount = 0
+        var cursor = index
+        while (cursor > 0) {
+            val codePoint = text.codePointBefore(cursor)
+            if (!codePoint.isRegionalIndicator()) break
+            regionalCount++
+            cursor -= Character.charCount(codePoint)
+        }
+        return regionalCount % 2 == 1
+    }
+    return false
+}
+
+private fun Int.isUnicodeGraphemeExtension(): Boolean {
+    val category = Character.getType(this)
+    return category == Character.NON_SPACING_MARK.toInt() ||
+        category == Character.COMBINING_SPACING_MARK.toInt() ||
+        category == Character.ENCLOSING_MARK.toInt() ||
+        this in 0xFE00..0xFE0F ||
+        this in 0xE0100..0xE01EF ||
+        this in 0x1F3FB..0x1F3FF ||
+        this in 0xE0020..0xE007F
+}
+
+private fun Int.isRegionalIndicator(): Boolean = this in 0x1F1E6..0x1F1FF
+
+private const val ZERO_WIDTH_JOINER = 0x200D

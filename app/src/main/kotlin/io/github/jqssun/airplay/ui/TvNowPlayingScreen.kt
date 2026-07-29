@@ -2,6 +2,7 @@
 
 package io.github.jqssun.airplay.ui
 
+import android.app.ActivityManager
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint as AndroidPaint
@@ -11,6 +12,7 @@ import android.view.TextureView
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -111,9 +113,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -130,6 +134,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.lyrics.LyricAlignment
+import io.github.jqssun.airplay.lyrics.LyricHighlightGraphemeRange
 import io.github.jqssun.airplay.lyrics.LyricLine
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
@@ -137,17 +142,20 @@ import io.github.jqssun.airplay.lyrics.combinedDisplayText
 import io.github.jqssun.airplay.lyrics.lyricWordProgress
 import io.github.jqssun.airplay.lyrics.lyricWordsMatchLine
 import io.github.jqssun.airplay.lyrics.lyricHighlightGraphemeRange
-import io.github.jqssun.airplay.lyrics.lyricHighlightGlyphPulse
+import io.github.jqssun.airplay.lyrics.lyricHighlightHeadAura
 import io.github.jqssun.airplay.lyrics.lyricHighlightGlyphScale
 import io.github.jqssun.airplay.lyrics.lyricSustainedWordAura
 import io.github.jqssun.airplay.lyrics.progressiveTextSlice
 import io.github.jqssun.airplay.lyrics.smoothLyricDisplayPosition
+import io.github.jqssun.airplay.lyrics.wordTimedLyricLayoutText
+import io.github.jqssun.airplay.renderer.AudioMeterLevels
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -155,9 +163,39 @@ private const val LYRICS_BUTTON_HIDE_DELAY_MS = 5_000L
 private const val QUEUE_BROWSE_RETURN_DELAY_MS = 4_000L
 private const val LYRIC_CLOCK_SAMPLE_INTERVAL_NS = 80_000_000L
 private val AppleLyricEasing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+private val AppleLyricRailEasing = CubicBezierEasing(0.2f, 0.72f, 0.2f, 1f)
 
 internal fun lyricsPageVisible(lyricsEnabled: Boolean, queueBrowsing: Boolean): Boolean =
     lyricsEnabled && !queueBrowsing
+
+internal fun centeredTrackTitleViewportWidthPx(
+    naturalTitleWidthPx: Int,
+    availableWidthPx: Int,
+    equalizerAndGapPx: Int,
+): Int = minOf(
+    naturalTitleWidthPx.coerceAtLeast(0),
+    (availableWidthPx - equalizerAndGapPx.coerceAtLeast(0) * 2).coerceAtLeast(0),
+)
+
+internal fun smoothAudioMeterDisplay(
+    previous: AudioMeterLevels,
+    target: AudioMeterLevels,
+    frameDeltaMs: Long,
+): AudioMeterLevels {
+    fun smooth(previousBand: Float, targetBand: Float): Float {
+        val timeConstantMs = if (targetBand >= previousBand) 54f else 145f
+        val deltaMs = frameDeltaMs.coerceIn(1L, 50L).toFloat()
+        val coefficient = 1f -
+            exp((-deltaMs / timeConstantMs).toDouble()).toFloat()
+        val value = previousBand + (targetBand - previousBand) * coefficient
+        return if (value < 0.002f) 0f else value.coerceIn(0f, 1f)
+    }
+    return AudioMeterLevels(
+        low = smooth(previous.low, target.low),
+        mid = smooth(previous.mid, target.mid),
+        high = smooth(previous.high, target.high),
+    )
+}
 
 internal fun boundedLyricAuraRadius(
     desiredRadius: Float,
@@ -173,6 +211,27 @@ internal fun boundedLyricAuraRadius(
         height - centerY,
     ).coerceAtLeast(0f)
     return minOf(desiredRadius.coerceAtLeast(0f), availableRadius * 0.92f)
+}
+
+internal fun boundedLyricGlyphScale(
+    desiredScale: Float,
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+    width: Float,
+    height: Float,
+): Float {
+    if (desiredScale <= 1f || right <= left || bottom <= top || width <= 0f || height <= 0f) {
+        return 1f
+    }
+    val glyphWidth = right - left
+    val glyphHeight = bottom - top
+    val horizontalRoom = minOf(left, width - right).coerceAtLeast(0f)
+    val verticalRoom = minOf(top, height - bottom).coerceAtLeast(0f)
+    val horizontalLimit = 1f + horizontalRoom * 2f / glyphWidth
+    val verticalLimit = 1f + verticalRoom * 2f / glyphHeight
+    return minOf(desiredScale, horizontalLimit, verticalLimit).coerceAtLeast(1f)
 }
 
 /** Dedicated ten-foot Now Playing surface, proportioned around a 1920 x 1080 canvas. */
@@ -198,11 +257,17 @@ internal fun TvNowPlayingScreen(
     val upNextTracks by viewModel.upNextTracks.collectAsState()
     val queueName by viewModel.queueName.collectAsState()
     val collectionName = queueName.ifBlank { track.album }
+    val audioMeterLevelProvider = remember(viewModel) {
+        { viewModel.sampleAudioMeterLevels() }
+    }
     val displayArtwork = if (motionArtworkEnabled) animatedArtworkCover ?: track.coverArt else track.coverArt
-    val extracted = remember(displayArtwork) { extractArtworkPalette(displayArtwork) }
+    // Animated artwork can cut to very different frames. Apple-style ambient
+    // colour remains anchored to the canonical still cover so the room does
+    // not flash while the cover video plays.
+    val backgroundArtwork = track.coverArt ?: animatedArtworkCover
+    val extracted = remember(backgroundArtwork) { extractArtworkPalette(backgroundArtwork) }
     val primary by animateColorAsState(extracted.primary, tween(1_400), label = "artPrimary")
     val secondary by animateColorAsState(extracted.secondary, tween(1_400), label = "artSecondary")
-    val dark by animateColorAsState(extracted.dark, tween(1_400), label = "artDark")
     val accent = mix(primary, Color.White, 0.42f)
     val paper = Color(0xFFF9F8FB)
     val muted = paper.copy(alpha = 0.56f)
@@ -403,11 +468,16 @@ internal fun TvNowPlayingScreen(
     ) {
         val baseScale = minOf(maxWidth.value / 960f, maxHeight.value / 540f)
         val scale = (baseScale * 0.88f).coerceIn(0.74f, 1.76f)
+        val context = LocalContext.current
+        val reducedAmbientDetail = remember(context) {
+            val activityManager = context.getSystemService(ActivityManager::class.java)
+            activityManager?.isLowRamDevice == true ||
+                (activityManager?.memoryClass ?: 256) <= 256
+        }
 
         BlendedArtworkBackdrop(
-            primary = extracted.primary,
-            secondary = extracted.secondary,
-            dark = extracted.dark,
+            palette = extracted,
+            reducedDetail = reducedAmbientDetail,
         )
 
         val queueLayoutProgress by animateFloatAsState(
@@ -437,6 +507,7 @@ internal fun TvNowPlayingScreen(
             scale = scale,
             playing = playing,
             artworkMotionEnabled = motionArtworkEnabled,
+            audioMeterLevelProvider = audioMeterLevelProvider,
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
@@ -634,6 +705,7 @@ private fun NoLyricsQueueStage(
     scale: Float,
     playing: Boolean,
     artworkMotionEnabled: Boolean,
+    audioMeterLevelProvider: () -> AudioMeterLevels,
     modifier: Modifier = Modifier,
 ) {
     fun trackAt(offset: Int): TrackInfo? = when {
@@ -684,6 +756,7 @@ private fun NoLyricsQueueStage(
                     muted = muted,
                     scale = scale,
                     playing = playing,
+                    audioMeterLevelProvider = audioMeterLevelProvider,
                 )
             }
         }
@@ -705,6 +778,7 @@ private fun EqualQueueTrackCard(
     muted: Color,
     scale: Float,
     playing: Boolean,
+    audioMeterLevelProvider: () -> AudioMeterLevels,
 ) {
     val artSize = (292f * scale).dp
     val cardAlpha by animateFloatAsState(
@@ -779,28 +853,31 @@ private fun EqualQueueTrackCard(
         }
         Spacer(Modifier.height((12f * scale).dp))
         if (track != null) {
-            BouncingFadingText(
-                text = track.title,
-                color = paper.copy(alpha = 0.88f),
-                style = TextStyle(
-                    fontSize = (18f * scale).sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-                leading = if (isCurrent) {
-                    {
-                        MiniNowPlayingEqualizer(
-                            color = mix(primary, Color.White, 0.58f),
-                            scale = scale,
-                            playing = playing,
-                        )
-                        Spacer(Modifier.width((5f * scale).dp))
-                    }
-                } else {
-                    null
-                },
-            )
+            if (isCurrent) {
+                TitleWithEqualizer(
+                    title = track.title,
+                    color = paper.copy(alpha = 0.88f),
+                    equalizerColor = mix(primary, Color.White, 0.58f),
+                    scale = scale,
+                    playing = playing,
+                    audioMeterLevelProvider = audioMeterLevelProvider,
+                    titleFontSize = 18f,
+                    titleLineHeight = 22f,
+                    titleFontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                BouncingFadingText(
+                    text = track.title,
+                    color = paper.copy(alpha = 0.88f),
+                    style = TextStyle(
+                        fontSize = (18f * scale).sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
         Spacer(Modifier.height((2f * scale).dp))
         BouncingFadingText(
@@ -1179,12 +1256,11 @@ private fun KaraokeControlCircle(
 
 @Composable
 private fun BlendedArtworkBackdrop(
-    primary: Color,
-    secondary: Color,
-    dark: Color,
+    palette: ArtworkPalette,
+    reducedDetail: Boolean,
 ) {
-    val ambientBitmap = remember(primary, secondary, dark) {
-        createAmbientBackdrop(primary, secondary, dark)
+    val textures = remember(palette, reducedDetail) {
+        createAmbientBackdropTextures(palette, reducedDetail)
     }
     val transition = rememberInfiniteTransition(label = "ambientBackdrop")
     val phase = transition.animateFloat(
@@ -1201,69 +1277,163 @@ private fun BlendedArtworkBackdrop(
             .fillMaxSize()
             .background(Color(0xFF08090D)),
     ) {
-        Image(
-            bitmap = ambientBitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            modifier = Modifier
+        // Keep the old colour field alive while the new cover blooms in.
+        // Crossfading complete low-resolution textures avoids allocating a
+        // fresh bitmap for every intermediate colour-animation frame.
+        Crossfade(
+            targetState = textures,
+            animationSpec = tween(1_650, easing = AppleLyricRailEasing),
+            label = "ambientPaletteCrossfade",
+        ) { target ->
+            AnimatedAmbientTextureLayers(
+                textures = target,
+                phase = phase,
+                reducedDetail = reducedDetail,
+            )
+        }
+        // A neutral centre sheen gives the coloured field the soft depth seen
+        // behind Apple Music lyrics without tinting white type.
+        Box(
+            Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    val angle = phase.value * (2f * PI.toFloat())
-                    val breathe = 0.035f * sin(angle * 0.72f)
-                    scaleX = 1.18f + breathe
-                    scaleY = 1.18f + breathe
-                    translationX = 44f * cos(angle)
-                    translationY = 30f * sin(angle * 0.82f)
-                    rotationZ = 1.1f * sin(angle * 0.64f)
-                },
-        )
-        // A second, translucent copy drifts in the opposite direction. Both
-        // layers reuse the same 384 x 216 bitmap, so the richer motion costs
-        // very little memory on entry-level Android TV hardware.
-        Image(
-            bitmap = ambientBitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    val angle = phase.value * (2f * PI.toFloat()) + PI.toFloat() * 0.68f
-                    val breathe = 0.045f * cos(angle * 0.58f)
-                    alpha = 0.3f
-                    scaleX = 1.32f + breathe
-                    scaleY = 1.32f + breathe
-                    translationX = -38f * sin(angle * 0.76f)
-                    translationY = 34f * cos(angle)
-                    rotationZ = -1.4f * cos(angle * 0.61f)
-                },
+                .background(
+                    Brush.radialGradient(
+                        0f to Color.White.copy(alpha = 0.055f),
+                        0.46f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.1f),
+                    )
+                )
         )
         Box(
             Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        0f to Color.Black.copy(alpha = 0.06f),
-                        0.58f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.48f),
+                        0f to Color.Black.copy(alpha = 0.075f),
+                        0.42f to Color.Transparent,
+                        0.72f to Color.Black.copy(alpha = 0.08f),
+                        1f to Color.Black.copy(alpha = 0.46f),
                     )
                 )
                 .background(
                     Brush.horizontalGradient(
-                        0f to Color.Black.copy(alpha = 0.16f),
-                        0.52f to Color.Black.copy(alpha = 0.01f),
-                        1f to Color.Black.copy(alpha = 0.18f),
+                        0f to Color.Black.copy(alpha = 0.14f),
+                        0.48f to Color.Black.copy(alpha = 0.012f),
+                        1f to Color.Black.copy(alpha = 0.17f),
                     )
                 )
         )
     }
 }
 
-private fun createAmbientBackdrop(primary: Color, secondary: Color, dark: Color): Bitmap {
-    val width = 384
-    val height = 216
+private data class AmbientBackdropTextures(
+    val base: Bitmap,
+    val bloom: Bitmap,
+)
+
+@Composable
+private fun AnimatedAmbientTextureLayers(
+    textures: AmbientBackdropTextures,
+    phase: androidx.compose.runtime.State<Float>,
+    reducedDetail: Boolean,
+) {
+    val base = remember(textures) { textures.base.asImageBitmap() }
+    val bloom = remember(textures) { textures.bloom.asImageBitmap() }
+    Box(Modifier.fillMaxSize()) {
+        Image(
+            bitmap = base,
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val angle = phase.value * (2f * PI.toFloat())
+                    val breathe = 0.034f * sin(angle * 0.71f)
+                    scaleX = 1.22f + breathe
+                    scaleY = 1.22f + breathe * 0.86f
+                    translationX = 52f * cos(angle * 0.87f)
+                    translationY = 34f * sin(angle * 0.69f)
+                    rotationZ = 0.85f * sin(angle * 0.57f)
+                },
+        )
+        Image(
+            bitmap = bloom,
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val angle = phase.value * (2f * PI.toFloat()) + PI.toFloat() * 0.73f
+                    val breathe = 0.052f * cos(angle * 0.53f)
+                    alpha = 0.48f
+                    scaleX = 1.42f + breathe
+                    scaleY = 1.38f + breathe * 0.9f
+                    translationX = -48f * sin(angle * 0.76f)
+                    translationY = 42f * cos(angle * 0.63f)
+                    rotationZ = -1.55f * cos(angle * 0.49f)
+                },
+        )
+        if (!reducedDetail) {
+            // Premium devices receive one additional very faint pass. It
+            // creates parallax rather than extra blur; low-RAM televisions
+            // retain the same colours and timing with two texture quads.
+            Image(
+                bitmap = base,
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val angle = phase.value * (2f * PI.toFloat()) + PI.toFloat() * 1.31f
+                        alpha = 0.13f
+                        scaleX = 1.66f
+                        scaleY = 1.58f
+                        translationX = 36f * cos(angle * 0.41f)
+                        translationY = -32f * sin(angle * 0.46f)
+                        rotationZ = 2.1f * sin(angle * 0.38f)
+                    },
+            )
+        }
+    }
+}
+
+private fun createAmbientBackdropTextures(
+    palette: ArtworkPalette,
+    reducedDetail: Boolean,
+): AmbientBackdropTextures {
+    val width = if (reducedDetail) 448 else 576
+    val height = width * 9 / 16
+    return AmbientBackdropTextures(
+        base = createAmbientBackdropTexture(
+            palette = palette,
+            width = width,
+            height = height,
+            variant = 0,
+        ),
+        bloom = createAmbientBackdropTexture(
+            palette = palette,
+            width = width,
+            height = height,
+            variant = 1,
+        ),
+    )
+}
+
+private fun createAmbientBackdropTexture(
+    palette: ArtworkPalette,
+    width: Int,
+    height: Int,
+    variant: Int,
+): Bitmap {
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val canvas = AndroidCanvas(bitmap)
-    canvas.drawColor(mix(dark, Color.Black, 0.34f).toArgb())
+    canvas.drawColor(
+        mix(
+            palette.dark,
+            Color.Black,
+            if (variant == 0) 0.2f else 0.34f,
+        ).toArgb()
+    )
     val paint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG)
 
     fun blob(color: Color, x: Float, y: Float, radius: Float, strength: Float) {
@@ -1282,11 +1452,44 @@ private fun createAmbientBackdrop(primary: Color, secondary: Color, dark: Color)
         canvas.drawCircle(x, y, radius, paint)
     }
 
-    blob(primary, width * 0.18f, height * 0.32f, width * 0.58f, 0.72f)
-    blob(secondary, width * 0.86f, height * 0.28f, width * 0.62f, 0.64f)
-    blob(mix(primary, secondary, 0.5f), width * 0.54f, height * 0.94f, width * 0.52f, 0.52f)
+    if (variant == 0) {
+        blob(palette.primary, width * 0.12f, height * 0.28f, width * 0.64f, 0.78f)
+        blob(palette.secondary, width * 0.92f, height * 0.2f, width * 0.62f, 0.72f)
+        blob(palette.tertiary, width * 0.58f, height * 1.02f, width * 0.68f, 0.62f)
+        blob(palette.highlight, width * 0.48f, height * 0.22f, width * 0.34f, 0.34f)
+        blob(Color.Black, width * 0.48f, height * 0.62f, width * 0.7f, 0.16f)
+    } else {
+        blob(palette.secondary, width * 0.08f, height * 0.9f, width * 0.66f, 0.72f)
+        blob(palette.primary, width * 0.86f, height * 0.7f, width * 0.68f, 0.68f)
+        blob(palette.tertiary, width * 0.5f, height * -0.04f, width * 0.58f, 0.56f)
+        blob(palette.highlight, width * 0.76f, height * 0.17f, width * 0.3f, 0.3f)
+        blob(Color.Black, width * 0.56f, height * 0.52f, width * 0.76f, 0.2f)
+    }
     paint.shader = null
+    applyAmbientDither(
+        bitmap = bitmap,
+        seed = palette.primary.toArgb() xor palette.secondary.toArgb() xor (variant * 0x45D9F3B),
+    )
     return bitmap
+}
+
+private fun applyAmbientDither(bitmap: Bitmap, seed: Int) {
+    val width = bitmap.width
+    val height = bitmap.height
+    val pixels = IntArray(width * height)
+    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+    var state = seed
+    pixels.indices.forEach { index ->
+        state = state * 1_664_525 + 1_013_904_223
+        val delta = ((state ushr 29) and 0x7) - 3
+        val pixel = pixels[index]
+        val alpha = (pixel ushr 24) and 0xFF
+        val red = (((pixel ushr 16) and 0xFF) + delta).coerceIn(0, 255)
+        val green = (((pixel ushr 8) and 0xFF) + delta).coerceIn(0, 255)
+        val blue = ((pixel and 0xFF) + delta).coerceIn(0, 255)
+        pixels[index] = (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+    }
+    bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
 }
 
 @Composable
@@ -1303,6 +1506,7 @@ private fun MinimalArtworkColumn(
     scale: Float,
     playing: Boolean,
     artworkMotionEnabled: Boolean,
+    audioMeterLevelProvider: () -> AudioMeterLevels = { AudioMeterLevels.Silent },
 ) {
     val artworkSize = (282f * scale).dp
     val motion = rememberInfiniteTransition(label = "artworkMotion")
@@ -1408,6 +1612,7 @@ private fun MinimalArtworkColumn(
             equalizerColor = mix(primary, Color.White, 0.58f),
             scale = scale,
             playing = playing,
+            audioMeterLevelProvider = audioMeterLevelProvider,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height((3f * scale).dp))
@@ -1443,26 +1648,37 @@ private fun TitleWithEqualizer(
     equalizerColor: Color,
     scale: Float,
     playing: Boolean,
+    audioMeterLevelProvider: () -> AudioMeterLevels,
+    titleFontSize: Float = 20f,
+    titleLineHeight: Float = 24f,
+    titleFontWeight: FontWeight = FontWeight.Bold,
     modifier: Modifier = Modifier,
 ) {
     val titleStyle = TextStyle(
-        fontSize = (20f * scale).sp,
-        lineHeight = (24f * scale).sp,
-        fontWeight = FontWeight.Bold,
+        fontSize = (titleFontSize * scale).sp,
+        lineHeight = (titleLineHeight * scale).sp,
+        fontWeight = titleFontWeight,
         textAlign = TextAlign.Center,
     )
     var availableWidthPx by remember(title) { mutableIntStateOf(0) }
     var titleWidthPx by remember(title) { mutableIntStateOf(0) }
     val density = LocalDensity.current
-    val equalizerAndGapPx = with(density) { (19f * scale).dp.roundToPx() }
-    val titleOverflows = titleWidthPx + equalizerAndGapPx > availableWidthPx
+    val equalizerWidthPx = with(density) { (15f * scale).dp.roundToPx() }
+    val equalizerGapPx = with(density) { (4f * scale).dp.roundToPx() }
+    val titleViewportWidthPx = centeredTrackTitleViewportWidthPx(
+        naturalTitleWidthPx = titleWidthPx,
+        availableWidthPx = availableWidthPx,
+        equalizerAndGapPx = equalizerWidthPx + equalizerGapPx,
+    )
+    val titleViewportWidth = with(density) { titleViewportWidthPx.toDp() }
 
     Box(
         modifier = modifier.onSizeChanged { availableWidthPx = it.width },
         contentAlignment = Alignment.Center,
     ) {
-        // Measure without a width constraint. Short names can be centred with
-        // their indicator; long ones retain a fixed indicator and marquee.
+        // Measure the title independently. The equalizer is a separate sibling
+        // so it can sit close to the first glyph without shifting the title's
+        // optical centre or joining its marquee animation.
         Text(
             text = title,
             color = Color.Transparent,
@@ -1475,32 +1691,28 @@ private fun TitleWithEqualizer(
                 .onSizeChanged { titleWidthPx = it.width },
         )
 
-        if (titleOverflows) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MiniNowPlayingEqualizer(color = equalizerColor, scale = scale, playing = playing)
-                Spacer(Modifier.width((4f * scale).dp))
-                BouncingFadingText(
-                    text = title,
-                    color = color,
-                    style = titleStyle,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                MiniNowPlayingEqualizer(color = equalizerColor, scale = scale, playing = playing)
-                Spacer(Modifier.width((4f * scale).dp))
-                Text(
-                    text = title,
-                    color = color,
-                    style = titleStyle,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
+        if (titleViewportWidthPx > 0) {
+            BouncingFadingText(
+                text = title,
+                color = color,
+                style = titleStyle,
+                modifier = Modifier.width(titleViewportWidth),
+            )
+            MiniNowPlayingEqualizer(
+                color = equalizerColor,
+                scale = scale,
+                playing = playing,
+                audioMeterLevelProvider = audioMeterLevelProvider,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .graphicsLayer {
+                        translationX = -(
+                            titleViewportWidthPx / 2f +
+                                equalizerGapPx +
+                                equalizerWidthPx / 2f
+                            )
+                    },
+            )
         }
     }
 }
@@ -1511,7 +1723,6 @@ private fun BouncingFadingText(
     color: Color,
     style: TextStyle,
     modifier: Modifier = Modifier,
-    leading: (@Composable () -> Unit)? = null,
 ) {
     var containerWidthPx by remember(text) { mutableIntStateOf(0) }
     var contentWidthPx by remember(text) { mutableIntStateOf(0) }
@@ -1568,32 +1779,15 @@ private fun BouncingFadingText(
         val textModifier = Modifier
             .wrapContentWidth(unbounded = true)
             .graphicsLayer { translationX = -travel.value }
-        if (leading == null) {
-            Text(
-                text = text,
-                color = color,
-                style = style,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Visible,
-                modifier = textModifier.onSizeChanged { contentWidthPx = it.width },
-            )
-        } else {
-            Row(
-                modifier = textModifier.onSizeChanged { contentWidthPx = it.width },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                leading()
-                Text(
-                    text = text,
-                    color = color,
-                    style = style,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Visible,
-                )
-            }
-        }
+        Text(
+            text = text,
+            color = color,
+            style = style,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Visible,
+            modifier = textModifier.onSizeChanged { contentWidthPx = it.width },
+        )
     }
 }
 
@@ -1602,46 +1796,46 @@ private fun MiniNowPlayingEqualizer(
     color: Color,
     scale: Float,
     playing: Boolean,
+    audioMeterLevelProvider: () -> AudioMeterLevels,
+    modifier: Modifier = Modifier,
 ) {
-    val motion = rememberInfiniteTransition(label = "titleEqualizer")
-    val first = motion.animateFloat(
-        initialValue = 0.26f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            tween(430, easing = FastOutSlowInEasing),
-            RepeatMode.Reverse,
-        ),
-        label = "titleEqualizerFirst",
-    )
-    val second = motion.animateFloat(
-        initialValue = 0.88f,
-        targetValue = 0.34f,
-        animationSpec = infiniteRepeatable(
-            tween(570, easing = FastOutSlowInEasing),
-            RepeatMode.Reverse,
-        ),
-        label = "titleEqualizerSecond",
-    )
-    val third = motion.animateFloat(
-        initialValue = 0.42f,
-        targetValue = 0.92f,
-        animationSpec = infiniteRepeatable(
-            tween(360, easing = FastOutSlowInEasing),
-            RepeatMode.Reverse,
-        ),
-        label = "titleEqualizerThird",
-    )
+    val latestLevelProvider by rememberUpdatedState(audioMeterLevelProvider)
+    var displayedLevels by remember { mutableStateOf(AudioMeterLevels.Silent) }
+    LaunchedEffect(playing) {
+        if (!playing) {
+            displayedLevels = AudioMeterLevels.Silent
+            return@LaunchedEffect
+        }
+        var previousFrameNanos = 0L
+        while (isActive) {
+            val frameNanos = withFrameNanos { it }
+            val frameDeltaMs = if (previousFrameNanos == 0L) {
+                16L
+            } else {
+                (frameNanos - previousFrameNanos) / 1_000_000L
+            }
+            previousFrameNanos = frameNanos
+            displayedLevels = smoothAudioMeterDisplay(
+                previous = displayedLevels,
+                target = latestLevelProvider(),
+                frameDeltaMs = frameDeltaMs,
+            )
+        }
+    }
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .width((15f * scale).dp)
             .height((14f * scale).dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
-        listOf(first.value, second.value, third.value).mapIndexed { index, animatedLevel ->
-            if (playing) animatedLevel else listOf(0.46f, 0.72f, 0.56f)[index]
-        }.forEach { level ->
+        listOf(
+            displayedLevels.low,
+            displayedLevels.mid,
+            displayedLevels.high,
+        ).forEach { audioLevel ->
+            val level = 0.16f + audioLevel * 0.84f
             Box(
                 Modifier
                     .width((3f * scale).dp)
@@ -1651,7 +1845,7 @@ private fun MiniNowPlayingEqualizer(
                         transformOrigin = TransformOrigin(0.5f, 1f)
                     }
                     .background(
-                        color = color,
+                        color = color.copy(alpha = 0.6f + audioLevel * 0.4f),
                         shape = RoundedCornerShape((2f * scale).dp),
                     )
             )
@@ -1995,6 +2189,10 @@ private fun ScrollableSyncedLyrics(
             items = visibleTimeline,
             key = { _, entry -> entry.key },
         ) { index, entry ->
+            val previousEntry = visibleTimeline.getOrNull(index - 1)
+            val followsInstrumentalGap = previousEntry != null &&
+                previousEntry.line == null &&
+                previousEntry.writerCredit == null
             val edgeBlur = lyricEdgeBlurFactor(
                 listState = listState,
                 itemIndex = index,
@@ -2020,7 +2218,11 @@ private fun ScrollableSyncedLyrics(
                     scale = scale,
                     browsing = browsing,
                     isUpcoming = !browsing && index == upcomingLineIndex,
-                    hasGapBefore = index > activeIndex + 1,
+                    topSpacing = when {
+                        index == 0 -> 0f
+                        followsInstrumentalGap -> 20f
+                        else -> 42f
+                    },
                     edgeBlur = edgeBlur,
                     isOutsideLiveWindow = isOutsideLiveWindow,
                 )
@@ -2342,7 +2544,7 @@ private fun ScrollableLyricLine(
     scale: Float,
     browsing: Boolean,
     isUpcoming: Boolean,
-    hasGapBefore: Boolean,
+    topSpacing: Float,
     edgeBlur: Float,
     isOutsideLiveWindow: Boolean,
 ) {
@@ -2354,13 +2556,24 @@ private fun ScrollableLyricLine(
         displayParts.asideText?.let { aside ->
             lyricWordsMatchLine(aside, displayParts.asideWords)
         } == true
+    val mainLayoutText = remember(
+        displayParts.mainText,
+        displayParts.mainWords,
+        mainWordByWord,
+    ) {
+        if (mainWordByWord) {
+            wordTimedLyricLayoutText(displayParts.mainText, displayParts.mainWords)
+        } else {
+            displayParts.mainText
+        }
+    }
     val isTrailing = line.alignment == LyricAlignment.TRAILING
     val textAlign = if (isTrailing) TextAlign.End else TextAlign.Start
     val distance = abs(lineIndex - activeIndex)
     val emphasis by animateFloatAsState(
         targetValue = when {
             isActive -> 1f
-            isUpcoming -> 0.38f
+            isUpcoming -> 0.34f
             browsing -> 0.78f
             distance == 1 -> 0.34f
             distance == 2 -> 0.25f
@@ -2375,9 +2588,9 @@ private fun ScrollableLyricLine(
     val sizeScale by animateFloatAsState(
         targetValue = when {
             isActive -> 1f
-            isUpcoming -> 0.98f
-            browsing -> 0.98f
-            else -> 0.96f
+            isUpcoming -> 0.94f
+            browsing -> 0.96f
+            else -> 0.92f
         },
         animationSpec = spring(
             dampingRatio = 1f,
@@ -2388,7 +2601,7 @@ private fun ScrollableLyricLine(
     val logicalBlur = when {
         isOutsideLiveWindow && !browsing -> 0f
         browsing || isActive -> 0f
-        isUpcoming -> 1.9f
+        isUpcoming -> 1.45f
         distance == 1 -> 1.1f
         distance == 2 -> 2.8f
         distance == 3 -> 4.8f
@@ -2396,13 +2609,13 @@ private fun ScrollableLyricLine(
     }
     val blurRadius by animateFloatAsState(
         targetValue = maxOf(logicalBlur, edgeBlur * 3.4f),
-        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        animationSpec = tween(260, easing = AppleLyricRailEasing),
         label = "lyricLineBlur",
     )
     val edgeFade = 1f - edgeBlur * 0.34f
     val liveWindowAlpha by animateFloatAsState(
         targetValue = if (isOutsideLiveWindow) 0f else 1f,
-        animationSpec = tween(340, easing = FastOutSlowInEasing),
+        animationSpec = tween(420, easing = AppleLyricRailEasing),
         label = "lyricLiveWindowAlpha",
     )
 
@@ -2410,11 +2623,10 @@ private fun ScrollableLyricLine(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                top = if (isUpcoming) {
-                    (if (hasGapBefore) 20f else 48f) * scale
-                } else {
-                    0f
-                }.dp
+                // Spacing belongs to the timeline entry, not to its active
+                // state. Keeping it immutable prevents the next row from
+                // jumping upward by 48 dp at the exact lyric hand-off.
+                top = (topSpacing * scale).dp
             )
             .graphicsLayer {
                 alpha = emphasis * edgeFade * liveWindowAlpha
@@ -2456,14 +2668,18 @@ private fun ScrollableLyricLine(
                     )
                 } else {
                     Text(
-                        displayParts.mainText,
+                        mainLayoutText,
                         color = paper,
-                        fontSize = ((if (isActive) 50f else 46f) * scale).sp,
-                        lineHeight = ((if (isActive) 60f else 56f) * scale).sp,
-                        fontWeight = if (isActive) FontWeight.Black else FontWeight.Bold,
+                        // Active and inactive rows share identical measured
+                        // typography. Alpha, blur and a paint-only layer carry
+                        // the emphasis without changing line wrapping.
+                        fontSize = (50f * scale).sp,
+                        lineHeight = (60f * scale).sp,
+                        fontWeight = FontWeight.Black,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = textAlign,
+                        style = TextStyle(textDirection = TextDirection.Content),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -2497,6 +2713,13 @@ private fun ParentheticalLyric(
     wordByWord: Boolean,
 ) {
     val aside = parts.asideText ?: return
+    val stableAside = remember(aside, parts.asideWords, wordByWord) {
+        if (wordByWord) {
+            wordTimedLyricLayoutText(aside, parts.asideWords)
+        } else {
+            aside
+        }
+    }
     val textAlign = if (alignment == LyricAlignment.TRAILING) TextAlign.End else TextAlign.Start
     if (parts.asidePlacement == LyricAsidePlacement.BELOW) {
         Spacer(Modifier.height((9f * scale).dp))
@@ -2520,14 +2743,15 @@ private fun ParentheticalLyric(
         )
     } else {
         Text(
-            text = aside,
+            text = stableAside,
             color = paper.copy(alpha = if (active) 0.48f else 0.35f),
-            fontSize = (26f * scale).sp,
-            lineHeight = (33f * scale).sp,
+            fontSize = (27f * scale).sp,
+            lineHeight = (34f * scale).sp,
             fontWeight = FontWeight.Bold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = textAlign,
+            style = TextStyle(textDirection = TextDirection.Content),
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -2862,6 +3086,11 @@ private fun PlainLyrics(
     val listState = rememberLazyListState()
     val density = LocalDensity.current
 
+    LaunchedEffect(lyrics) {
+        // A new unsynchronised song must always begin at its first lyric,
+        // even if the viewer had scrolled deep into the previous song.
+        listState.scrollToItem(0)
+    }
     LaunchedEffect(browseSignal) {
         if (browseSignal == 0 || browseDirection == 0) return@LaunchedEffect
         listState.animateScrollBy(
@@ -2888,6 +3117,7 @@ private fun PlainLyrics(
                     fontSize = (35f * scale).sp,
                     lineHeight = (45f * scale).sp,
                     fontWeight = FontWeight.SemiBold,
+                    style = TextStyle(textDirection = TextDirection.Content),
                 )
             }
         }
@@ -2919,11 +3149,11 @@ private suspend fun LazyListState.animateLineToCenter(index: Int) {
     if (abs(delta) > 2) {
         animateScrollBy(
             value = delta.toFloat(),
-            animationSpec = spring(
-                // Critically damped motion reaches the new live row without
-                // the tiny rebound that reads as lyric-line vibration on TV.
-                dampingRatio = 1f,
-                stiffness = Spring.StiffnessMediumLow,
+            // A single bounded glide is easier to follow than a spring whose
+            // target moves as LazyColumn measures a newly active lyric.
+            animationSpec = tween(
+                durationMillis = 520,
+                easing = AppleLyricRailEasing,
             ),
         )
     }
@@ -2942,19 +3172,25 @@ private fun ProgressiveWordLine(
     fontWeight: FontWeight = FontWeight.Black,
     maxLines: Int = 3,
     textAlign: TextAlign = TextAlign.Start,
-    activeAlpha: Float = 0.94f,
-    futureAlpha: Float = 0.18f,
+    activeAlpha: Float = 0.98f,
+    futureAlpha: Float = 0.34f,
     auraMultiplier: Float = 1f,
 ) {
-    // Only Apple-supplied complete word timing enters this renderer. A
-    // line-synced Apple row is rendered as one active line by the caller.
+    // Only a complete provider timeline enters this renderer. The immutable
+    // layout string is shared by every paint layer, so karaoke never changes
+    // wrapping as a word becomes active.
     val renderWords = remember(text, words) {
         words.takeIf { lyricWordsMatchLine(text, it) }.orEmpty()
     }
     val renderedText = remember(text, renderWords) {
-        renderWords.takeIf { it.isNotEmpty() }
-            ?.joinToString(separator = "") { it.text }
-            ?: text.ifBlank { "♪" }
+        wordTimedLyricLayoutText(text, renderWords).ifBlank { "♪" }
+    }
+    val wordOffsets = remember(renderWords) {
+        IntArray(renderWords.size + 1).also { offsets ->
+            renderWords.forEachIndexed { index, word ->
+                offsets[index + 1] = offsets[index] + word.text.length
+            }
+        }
     }
     val activeIndex = renderWords.indexOfLast { word ->
         positionMs >= word.startMs && positionMs < word.endMs
@@ -2966,196 +3202,254 @@ private fun ProgressiveWordLine(
     val activeBlend = activeSlice?.let {
         AppleLyricEasing.transform(it.blendFraction)
     } ?: 0f
-    val activeHeadPulse = if (activeDurationMs < 360L) {
-        lyricHighlightGlyphPulse(AppleLyricEasing.transform(activeProgress))
+    val activeLocalProgress = if (activeDurationMs < 360L) {
+        AppleLyricEasing.transform(activeProgress)
     } else {
-        lyricHighlightGlyphPulse(activeBlend)
+        activeBlend
     }
+    val shortSyllable = activeDurationMs < 360L
     val activeSustainedAura = lyricSustainedWordAura(activeProgress, activeDurationMs)
-    val activeGlyphScale = lyricHighlightGlyphScale(activeProgress, activeDurationMs)
+    val activeGlyphScale = lyricHighlightGlyphScale(activeLocalProgress, activeDurationMs)
     val activeAuraStrength = (
-        maxOf(activeHeadPulse, activeSustainedAura * 0.78f) * auraMultiplier
+        lyricHighlightHeadAura(
+            graphemeProgress = activeLocalProgress,
+            wordProgress = activeProgress,
+            durationMs = activeDurationMs,
+        ) * auraMultiplier
         ).coerceIn(0f, 1f)
     val density = LocalDensity.current
-    val auraBlurPx = with(density) { (5f * scale).dp.toPx() }
-    val activeWordStart = if (activeIndex > 0) {
-        renderWords.take(activeIndex).sumOf { it.text.length }
+    val durationAuraWeight = ((activeDurationMs - 650L).toFloat() / 1_850f)
+        .coerceIn(0f, 1f)
+    val auraBlurPx = with(density) {
+        ((5.8f + durationAuraWeight * 3.2f) * scale).dp.toPx()
+    }
+    val activeWordStart = wordOffsets.getOrElse(activeIndex) { 0 }
+    val activeWordEnd = wordOffsets.getOrElse(activeIndex + 1) { activeWordStart }
+    val visibleActiveWordEnd = activeWord?.text
+        ?.indexOfLast { !it.isWhitespace() }
+        ?.takeIf { it >= 0 }
+        ?.let { activeWordStart + it + 1 }
+        ?: activeWordEnd
+    val activeGraphemeRange = activeWord?.let { word ->
+        if (shortSyllable) {
+            LyricHighlightGraphemeRange(
+                start = activeWordStart,
+                endExclusive = visibleActiveWordEnd,
+            ).takeIf { it.endExclusive > it.start }
+        } else {
+            lyricHighlightGraphemeRange(
+                wordText = word.text,
+                wordStartOffset = activeWordStart,
+                progress = activeProgress,
+            )
+        }
+    }
+    val activeWordRange = activeWord?.let {
+        LyricHighlightGraphemeRange(
+            start = activeWordStart,
+            endExclusive = visibleActiveWordEnd,
+        ).takeIf { range -> range.endExclusive > range.start }
+    }
+    val firstFutureIndex = renderWords.indexOfFirst { positionMs < it.startMs }
+        .takeIf { it >= 0 }
+        ?: renderWords.size
+    val solidEnd = when {
+        activeIndex < 0 -> wordOffsets.getOrElse(firstFutureIndex) { renderedText.length }
+        shortSyllable -> activeWordStart
+        else -> (activeWordStart + (activeSlice?.solidEnd ?: 0))
+    }.coerceIn(0, renderedText.length)
+    val headMix = if (shortSyllable) {
+        AppleLyricEasing.transform(activeProgress)
     } else {
-        0
+        activeBlend
+    }.coerceIn(0f, 1f)
+
+    var textLayout by remember(renderedText, fontSize, lineHeight, scale, textAlign) {
+        mutableStateOf<TextLayoutResult?>(null)
     }
-    val activeGraphemeRange = activeWord?.let {
-        lyricHighlightGraphemeRange(
-            wordText = it.text,
-            wordStartOffset = activeWordStart,
-            progress = activeProgress,
-        )
-    }
-    var textLayout by remember(renderedText, fontSize, lineHeight, scale) {
-        mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null)
-    }
-    val highlighted = remember(
-        text,
-        renderWords,
-        positionMs,
-        accent,
-        paper,
-        scale,
-        activeAlpha,
-        futureAlpha,
-        auraMultiplier,
+    val activeColor = remember(paper, activeAlpha) { paper.copy(alpha = activeAlpha) }
+    val futureColor = remember(paper, futureAlpha) { paper.copy(alpha = futureAlpha) }
+    val baseLayer = remember(
+        renderedText,
+        solidEnd,
+        activeColor,
+        futureColor,
     ) {
         buildAnnotatedString {
-            if (renderWords.isEmpty()) {
-                append(text.ifBlank { "♪" })
-                return@buildAnnotatedString
-            }
-
-            val activeColor = paper.copy(alpha = activeAlpha)
-            val future = paper.copy(alpha = futureAlpha)
-            val firstFutureIndex = renderWords.indexOfFirst { positionMs <= it.startMs }
-                .takeIf { it >= 0 }
-                ?: renderWords.size
-            val splitIndex = if (activeIndex >= 0) activeIndex else firstFutureIndex
-
-            if (splitIndex > 0) {
-                withStyle(SpanStyle(color = activeColor)) {
-                    append(renderWords.subList(0, splitIndex).joinToString("") { it.text })
+            append(renderedText)
+            if (length > 0) {
+                addStyle(SpanStyle(color = futureColor), 0, length)
+                if (solidEnd > 0) {
+                    addStyle(SpanStyle(color = activeColor), 0, solidEnd)
                 }
             }
-
-            if (activeIndex < 0) {
-                if (splitIndex < renderWords.size) {
-                    withStyle(SpanStyle(color = future)) {
-                        append(renderWords.subList(splitIndex, renderWords.size)
-                            .joinToString("") { it.text })
-                    }
-                }
-                return@buildAnnotatedString
-            }
-
-            val word = renderWords[activeIndex]
-            val progress = activeProgress
-            val wordFade = AppleLyricEasing.transform(progress)
-            val slice = activeSlice ?: progressiveTextSlice(word.text, progress)
-            val activeFade = activeBlend
-            val durationMs = activeDurationMs
-
-            fun appendKaraokeSpan(
-                value: String,
-                color: Color,
-            ) {
-                if (value.isEmpty()) return
-                withStyle(SpanStyle(color = color)) {
-                    append(value)
-                }
-            }
-
-            if (durationMs < 360L) {
-                appendKaraokeSpan(
-                    value = word.text,
-                    color = mix(future, activeColor, wordFade),
-                )
-            } else {
-                appendKaraokeSpan(
-                    value = word.text.substring(0, slice.solidEnd),
-                    color = activeColor,
-                )
-                appendKaraokeSpan(
-                    value = word.text.substring(slice.solidEnd, slice.blendEnd),
-                    color = mix(future, activeColor, activeFade),
-                )
-                appendKaraokeSpan(
-                    value = word.text.substring(slice.blendEnd),
-                    color = future,
-                )
-            }
-
-            if (activeIndex + 1 < renderWords.size) {
-                withStyle(SpanStyle(color = future)) {
-                    append(renderWords.subList(activeIndex + 1, renderWords.size)
-                        .joinToString("") { it.text })
-                }
-            }
-
-            val glowRange = activeGraphemeRange
-            if (
-                glowRange != null &&
-                activeAuraStrength > 0.01f &&
-                glowRange.start >= 0 &&
-                glowRange.endExclusive <= length &&
-                glowRange.endExclusive > glowRange.start
-            ) {
-                // Paint a glyph shadow, not a selection-path fill. This keeps
-                // the aura wrapped around letter shapes without ever producing
-                // a rectangular karaoke block.
+        }
+    }
+    val headLayer = remember(
+        renderedText,
+        activeGraphemeRange,
+        activeColor,
+        accent,
+        auraBlurPx,
+    ) {
+        buildAnnotatedString {
+            append(renderedText)
+            if (length > 0) addStyle(SpanStyle(color = Color.Transparent), 0, length)
+            activeGraphemeRange?.takeIf {
+                it.start >= 0 && it.endExclusive <= length && it.endExclusive > it.start
+            }?.let { range ->
                 addStyle(
                     SpanStyle(
+                        color = activeColor,
                         shadow = Shadow(
-                            color = mix(accent, Color.White, 0.78f).copy(
-                                alpha = 0.62f * activeAuraStrength
-                            ),
+                            color = mix(accent, Color.White, 0.84f).copy(alpha = 0.48f),
                             offset = androidx.compose.ui.geometry.Offset.Zero,
-                            blurRadius = auraBlurPx * (0.82f + activeSustainedAura * 0.42f),
-                        )
+                            blurRadius = auraBlurPx * 0.72f,
+                        ),
                     ),
-                    start = glowRange.start,
-                    end = glowRange.endExclusive,
+                    range.start,
+                    range.endExclusive,
                 )
             }
         }
     }
+    val auraLayer = remember(
+        renderedText,
+        activeWordRange,
+        accent,
+        auraBlurPx,
+    ) {
+        buildAnnotatedString {
+            append(renderedText)
+            if (length > 0) addStyle(SpanStyle(color = Color.Transparent), 0, length)
+            activeWordRange?.takeIf {
+                it.start >= 0 && it.endExclusive <= length && it.endExclusive > it.start
+            }?.let { range ->
+                addStyle(
+                    SpanStyle(
+                        color = Color.Transparent,
+                        shadow = Shadow(
+                            color = mix(accent, Color.White, 0.9f).copy(alpha = 0.72f),
+                            offset = androidx.compose.ui.geometry.Offset.Zero,
+                            blurRadius = auraBlurPx,
+                        ),
+                    ),
+                    range.start,
+                    range.endExclusive,
+                )
+            }
+        }
+    }
+    val auraLayerAlpha = (
+        activeAuraStrength * (0.34f + activeSustainedAura * 0.32f)
+        ).coerceIn(0f, 0.66f)
 
-    Text(
-        text = highlighted,
-        color = paper,
+    val layerTextStyle = TextStyle(
+        paper,
         fontSize = (fontSize * scale).sp,
         lineHeight = (lineHeight * scale).sp,
         fontWeight = fontWeight,
-        maxLines = maxLines,
-        overflow = TextOverflow.Ellipsis,
         textAlign = textAlign,
-        onTextLayout = { textLayout = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .drawWithContent {
-                val contentScope = this
-                drawContent()
-                val layout = textLayout
-                val range = activeGraphemeRange
+        textDirection = TextDirection.Content,
+    )
+
+    Box(Modifier.fillMaxWidth()) {
+        Text(
+            text = baseLayer,
+            style = layerTextStyle,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { result ->
+                val current = textLayout
                 if (
-                    layout != null &&
-                    range != null &&
-                    range.start >= 0 &&
-                    range.endExclusive <= layout.layoutInput.text.length &&
-                    range.endExclusive > range.start
+                    current == null ||
+                    current.size != result.size ||
+                    current.lineCount != result.lineCount
                 ) {
-                    if (activeGlyphScale > 1.001f) {
-                        val glyphPath = layout.getPathForRange(
-                            range.start,
-                            range.endExclusive,
-                        )
-                        val bounds = glyphPath.getBounds()
-                        if (bounds.width > 0f && bounds.height > 0f) {
-                            // Repaint only the active glyph through its outline.
-                            // The measured paragraph never changes, so a 14%
-                            // breath cannot make neighbouring words or the line
-                            // itself shake.
-                            withTransform({
-                                this.scale(
-                                    scaleX = activeGlyphScale,
-                                    scaleY = activeGlyphScale,
-                                    pivot = bounds.center,
-                                )
-                            }) {
-                                clipPath(glyphPath) {
-                                    contentScope.drawContent()
-                                }
-                            }
-                        }
-                    }
+                    textLayout = result
                 }
             },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (activeGraphemeRange != null && headMix > 0.001f) {
+            Text(
+                text = headLayer,
+                style = layerTextStyle,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = headMix }
+                    .scaledLyricGlyphLayer(
+                        textLayout = textLayout,
+                        range = activeGraphemeRange,
+                        desiredScale = activeGlyphScale,
+                    ),
+            )
+        }
+        if (activeWordRange != null && auraLayerAlpha > 0.001f) {
+            Text(
+                text = auraLayer,
+                style = layerTextStyle,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = auraLayerAlpha }
+                    .scaledLyricGlyphLayer(
+                        textLayout = textLayout,
+                        range = activeWordRange,
+                        desiredScale = 1f + (activeGlyphScale - 1f) * 0.34f,
+                    ),
+            )
+        }
+    }
+}
+
+private fun Modifier.scaledLyricGlyphLayer(
+    textLayout: TextLayoutResult?,
+    range: LyricHighlightGraphemeRange?,
+    desiredScale: Float,
+): Modifier = drawWithContent {
+    val contentScope = this
+    val layout = textLayout
+    if (
+        layout == null ||
+        range == null ||
+        range.start < 0 ||
+        range.endExclusive > layout.layoutInput.text.length ||
+        range.endExclusive <= range.start ||
+        desiredScale <= 1.001f
+    ) {
+        drawContent()
+        return@drawWithContent
+    }
+
+    val glyphPath = layout.getPathForRange(range.start, range.endExclusive)
+    val bounds = glyphPath.getBounds()
+    val safeScale = boundedLyricGlyphScale(
+        desiredScale = desiredScale,
+        left = bounds.left,
+        top = bounds.top,
+        right = bounds.right,
+        bottom = bounds.bottom,
+        width = size.width,
+        height = size.height,
     )
+    if (bounds.width <= 0f || bounds.height <= 0f || safeScale <= 1.001f) {
+        drawContent()
+        return@drawWithContent
+    }
+
+    withTransform({
+        this.scale(
+            scaleX = safeScale,
+            scaleY = safeScale,
+            pivot = bounds.center,
+        )
+    }) {
+        contentScope.drawContent()
+    }
 }
 
 @Composable

@@ -97,13 +97,13 @@ internal fun LyricsState.withRepairedWordTimings(trackDurationMs: Long): LyricsS
         // timing from both visible parts.
         val repairedMain = repairProviderWordStream(
             text = line.text,
-            words = line.words,
+            words = line.words.takeIf { line.exactWordTiming }.orEmpty(),
             providerLineEnd = providerLineEnd,
             hardBoundary = hardBoundary,
         )
         val repairedBackground = repairProviderWordStream(
             text = line.backgroundText,
-            words = line.backgroundWords,
+            words = line.backgroundWords.takeIf { line.exactWordTiming }.orEmpty(),
             providerLineEnd = providerLineEnd,
             hardBoundary = hardBoundary,
         )
@@ -146,7 +146,7 @@ internal fun LyricsState.withRepairedWordTimings(trackDurationMs: Long): LyricsS
         wordSyncMode = if (repaired.any { it.exactWordTiming }) {
             WordSyncMode.ENHANCED
         } else {
-            WordSyncMode.NONE
+            WordSyncMode.LINE
         },
     )
 }

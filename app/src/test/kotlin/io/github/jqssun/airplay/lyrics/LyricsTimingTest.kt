@@ -28,7 +28,7 @@ class LyricsTimingTest {
         assertTrue(first.words.isEmpty())
         assertFalse(first.exactWordTiming)
         assertEquals(4_000L, first.endMs)
-        assertEquals(WordSyncMode.NONE, repaired.wordSyncMode)
+        assertEquals(WordSyncMode.LINE, repaired.wordSyncMode)
     }
 
     @Test
@@ -45,7 +45,33 @@ class LyricsTimingTest {
 
         assertTrue(repaired.lines.all { it.words.isEmpty() })
         assertTrue(repaired.lines.none { it.exactWordTiming })
-        assertEquals(WordSyncMode.NONE, repaired.wordSyncMode)
+        assertEquals(WordSyncMode.LINE, repaired.wordSyncMode)
+    }
+
+    @Test
+    fun aFullLineTokenCannotBePromotedWhenProviderMarksItAsLineTiming() {
+        val source = LyricsState(
+            status = LyricsStatus.SYNCED,
+            lines = listOf(
+                LyricLine(
+                    timeMs = 1_000L,
+                    text = "The complete lyric row",
+                    words = listOf(
+                        LyricWord("The complete lyric row", 1_000L, 3_000L),
+                    ),
+                    exactWordTiming = false,
+                    endMs = 3_000L,
+                ),
+            ),
+            wordSyncMode = WordSyncMode.LINE,
+        )
+
+        val repaired = source.withRepairedWordTimings(trackDurationMs = 5_000L)
+        val line = repaired.lines.single()
+
+        assertTrue(line.words.isEmpty())
+        assertFalse(line.exactWordTiming)
+        assertEquals(WordSyncMode.LINE, repaired.wordSyncMode)
     }
 
     @Test
