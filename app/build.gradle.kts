@@ -31,8 +31,8 @@ android {
         applicationId = "com.airplayspeaker.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 302
-        versionName = "3.0.2-lrclib"
+        versionCode = 303
+        versionName = "3.0.3-lrclib"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")

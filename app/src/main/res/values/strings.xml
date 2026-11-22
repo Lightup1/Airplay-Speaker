@@ -203,6 +203,8 @@
     <string name="setting_lyrics_offset">Lyrics offset / 歌词偏移</string>
     <string name="setting_lyrics_offset_desc">Use Left/Right. Negative = lyrics later, positive = lyrics earlier. 左右键调整：负数让歌词延后，正数让歌词提前。</string>
     <string name="lyrics_offset_value">%+dms</string>
+    <string name="setting_smooth_mode">Smooth mode / 流畅模式</string>
+    <string name="setting_smooth_mode_desc">No blur, glow or moving background on the lyrics screen. 关闭歌词模糊、光晕和动态背景，滚动更流畅。</string>
     <string name="setting_audio_buffer_multiplier">Audio buffer size</string>
     <string name="setting_audio_buffer_multiplier_desc">AudioTrack buffer size multiplier</string>
     <string name="setting_audio_buffer_multiplier_value">%dx</string>

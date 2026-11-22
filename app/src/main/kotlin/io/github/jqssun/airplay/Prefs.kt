@@ -43,6 +43,8 @@ object Prefs {
     /** Positive values show lyrics earlier, negative values later. */
     const val LYRICS_OFFSET_MS = "lyrics_offset_ms"; const val DEF_LYRICS_OFFSET_MS = 0
     const val LYRICS_OFFSET_LIMIT_MS = 3_000; const val LYRICS_OFFSET_STEP_MS = 100
+    /** Drops blur, glow and animated backdrop on the lyrics screen for weak TV GPUs. */
+    const val SMOOTH_MODE = "smooth_mode"; const val DEF_SMOOTH_MODE = true
     const val AUTO_FULLSCREEN = "auto_fullscreen"; const val DEF_AUTO_FULLSCREEN = true
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true
     const val ADVERTISE_VIDEO = "advertise_video"; const val DEF_ADVERTISE_VIDEO = false

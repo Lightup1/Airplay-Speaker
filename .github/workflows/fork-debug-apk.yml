@@ -25,6 +25,14 @@ jobs:
           java-version: "21"
           cache: "gradle"
 
+      # Reuse one debug keystore across runs so updates install in place and
+      # keep the app's settings (a fresh runner would mint a new key each time).
+      - name: Restore debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: fork-debug-keystore-v1
+
       - name: Build debug APK
         run: |
           chmod +x ./gradlew

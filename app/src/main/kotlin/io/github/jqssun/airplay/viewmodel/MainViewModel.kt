@@ -229,6 +229,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _lyricsOffsetMs = MutableStateFlow(prefs.getInt(Prefs.LYRICS_OFFSET_MS, Prefs.DEF_LYRICS_OFFSET_MS))
     val lyricsOffsetMs: StateFlow<Int> = _lyricsOffsetMs.asStateFlow()
 
+    private val _smoothMode = MutableStateFlow(prefs.getBoolean(Prefs.SMOOTH_MODE, Prefs.DEF_SMOOTH_MODE))
+    val smoothMode: StateFlow<Boolean> = _smoothMode.asStateFlow()
+
     private val _idlePreview = MutableStateFlow(prefs.getBoolean(Prefs.IDLE_PREVIEW, Prefs.DEF_IDLE_PREVIEW))
     val idlePreview: StateFlow<Boolean> = _idlePreview.asStateFlow()
 
@@ -557,6 +560,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply(); _applyByServerRestart() }
     fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply(); _applyByServerRestart() }
     fun setAudioLatencyMs(v: Int) { _audioLatencyMs.value = v; prefs.edit().putInt(Prefs.AUDIO_LATENCY_MS, v).apply(); _applyByServerRestart() }
+    fun setSmoothMode(v: Boolean) { _smoothMode.value = v; prefs.edit().putBoolean(Prefs.SMOOTH_MODE, v).apply() }
+    fun adjustLyricsOffsetMs(delta: Int) = setLyricsOffsetMs(_lyricsOffsetMs.value + delta)
     fun setLyricsOffsetMs(v: Int) {
         val clamped = v.coerceIn(-Prefs.LYRICS_OFFSET_LIMIT_MS, Prefs.LYRICS_OFFSET_LIMIT_MS)
         _lyricsOffsetMs.value = clamped

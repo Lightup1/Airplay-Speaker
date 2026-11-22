@@ -115,10 +115,13 @@ internal fun TvMainScreen(
     }
 
     if (immersiveNowPlaying) {
-        TvNowPlayingScreen(
-            viewModel = viewModel,
-            onSettings = { destination = TvDestination.SETTINGS },
-        )
+        val smoothMode by viewModel.smoothMode.collectAsState()
+        androidx.compose.runtime.CompositionLocalProvider(LocalSmoothLyrics provides smoothMode) {
+            TvNowPlayingScreen(
+                viewModel = viewModel,
+                onSettings = { destination = TvDestination.SETTINGS },
+            )
+        }
         return
     }
 
@@ -783,6 +786,7 @@ private fun TvSettingsPanel(
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
     val fullscreenMotionArtwork by viewModel.fullscreenMotionArtwork.collectAsState()
     val lyricsOffsetMs by viewModel.lyricsOffsetMs.collectAsState()
+    val smoothMode by viewModel.smoothMode.collectAsState()
 
     Column(
         modifier = modifier
@@ -818,6 +822,14 @@ private fun TvSettingsPanel(
                     onDecrease = { viewModel.setLyricsOffsetMs(lyricsOffsetMs - Prefs.LYRICS_OFFSET_STEP_MS) },
                     onIncrease = { viewModel.setLyricsOffsetMs(lyricsOffsetMs + Prefs.LYRICS_OFFSET_STEP_MS) },
                     onReset = { viewModel.setLyricsOffsetMs(0) },
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_smooth_mode),
+                    stringResource(R.string.setting_smooth_mode_desc),
+                    smoothMode,
+                    viewModel::setSmoothMode,
                 )
             }
             item {

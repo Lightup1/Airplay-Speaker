@@ -134,6 +134,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.lyrics.LyricAlignment
@@ -237,12 +238,20 @@ internal fun boundedLyricGlyphScale(
     return minOf(desiredScale, horizontalLimit, verticalLimit).coerceAtLeast(1f)
 }
 
+/** True when blur, glow and backdrop animation should be skipped for weak TV GPUs. */
+internal val LocalSmoothLyrics = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+private const val KARAOKE_CONTROL_TOGGLE = 0
+private const val KARAOKE_CONTROL_OFFSET = 1
+private const val KARAOKE_CONTROL_DONE = 2
+
 /** Dedicated ten-foot Now Playing surface, proportioned around a 1920 x 1080 canvas. */
 @Composable
 internal fun TvNowPlayingScreen(
     viewModel: MainViewModel,
     onSettings: () -> Unit,
 ) {
+    val lyricsOffsetMs by viewModel.lyricsOffsetMs.collectAsState()
     val track by viewModel.trackInfo.collectAsState()
     val lyrics by viewModel.lyrics.collectAsState()
     val playing by viewModel.audioPlaying.collectAsState()
@@ -373,32 +382,47 @@ internal fun TvNowPlayingScreen(
                 val keyCode = event.nativeKeyEvent.keyCode
                 if (karaokePanelShown) {
                     when (keyCode) {
-                        AndroidKeyEvent.KEYCODE_VOLUME_UP,
-                        AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                        AndroidKeyEvent.KEYCODE_VOLUME_UP -> {
                             viewModel.adjustKaraokeVocalLevel(5)
                             return@onPreviewKeyEvent true
                         }
-                        AndroidKeyEvent.KEYCODE_VOLUME_DOWN,
-                        AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        AndroidKeyEvent.KEYCODE_VOLUME_DOWN -> {
                             viewModel.adjustKaraokeVocalLevel(-5)
                             return@onPreviewKeyEvent true
                         }
+                        AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                            if (karaokeControlSelection == KARAOKE_CONTROL_OFFSET) {
+                                viewModel.adjustLyricsOffsetMs(Prefs.LYRICS_OFFSET_STEP_MS)
+                            } else {
+                                viewModel.adjustKaraokeVocalLevel(5)
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (karaokeControlSelection == KARAOKE_CONTROL_OFFSET) {
+                                viewModel.adjustLyricsOffsetMs(-Prefs.LYRICS_OFFSET_STEP_MS)
+                            } else {
+                                viewModel.adjustKaraokeVocalLevel(-5)
+                            }
+                            return@onPreviewKeyEvent true
+                        }
                         AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
-                            karaokeControlSelection = 0
+                            karaokeControlSelection = (karaokeControlSelection - 1).coerceAtLeast(0)
                             return@onPreviewKeyEvent true
                         }
                         AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            karaokeControlSelection = 1
+                            karaokeControlSelection =
+                                (karaokeControlSelection + 1).coerceAtMost(KARAOKE_CONTROL_DONE)
                             return@onPreviewKeyEvent true
                         }
                         AndroidKeyEvent.KEYCODE_DPAD_CENTER,
                         AndroidKeyEvent.KEYCODE_ENTER,
                         AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
                         AndroidKeyEvent.KEYCODE_BUTTON_A -> {
-                            if (karaokeControlSelection == 0) {
-                                viewModel.setKaraokeEnabled(!karaokeEnabled)
-                            } else {
-                                karaokePanelShown = false
+                            when (karaokeControlSelection) {
+                                KARAOKE_CONTROL_TOGGLE -> viewModel.setKaraokeEnabled(!karaokeEnabled)
+                                KARAOKE_CONTROL_OFFSET -> viewModel.setLyricsOffsetMs(0)
+                                else -> karaokePanelShown = false
                             }
                             return@onPreviewKeyEvent true
                         }
@@ -483,9 +507,11 @@ internal fun TvNowPlayingScreen(
         val baseScale = minOf(maxWidth.value / 960f, maxHeight.value / 540f)
         val scale = (baseScale * 0.88f).coerceIn(0.74f, 1.76f)
         val context = LocalContext.current
-        val reducedAmbientDetail = remember(context) {
+        val smoothLyrics = LocalSmoothLyrics.current
+        val reducedAmbientDetail = remember(context, smoothLyrics) {
             val activityManager = context.getSystemService(ActivityManager::class.java)
-            activityManager?.isLowRamDevice == true ||
+            smoothLyrics ||
+                activityManager?.isLowRamDevice == true ||
                 (activityManager?.memoryClass ?: 256) <= 256
         }
 
@@ -662,6 +688,7 @@ internal fun TvNowPlayingScreen(
             KaraokeControlPanel(
                 enabled = karaokeEnabled,
                 vocalLevel = karaokeVocalLevel,
+                lyricsOffsetMs = lyricsOffsetMs,
                 selectedControl = karaokeControlSelection,
                 paper = paper,
                 accent = accent,
@@ -1192,6 +1219,7 @@ private fun KaraokeQuickBadge(
 private fun KaraokeControlPanel(
     enabled: Boolean,
     vocalLevel: Int,
+    lyricsOffsetMs: Int,
     selectedControl: Int,
     paper: Color,
     accent: Color,
@@ -1265,7 +1293,7 @@ private fun KaraokeControlPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KaraokeControlCircle(
-                selected = selectedControl == 0,
+                selected = selectedControl == KARAOKE_CONTROL_TOGGLE,
                 active = enabled,
                 paper = paper,
                 scale = scale,
@@ -1278,7 +1306,20 @@ private fun KaraokeControlPanel(
                 )
             }
             KaraokeControlCircle(
-                selected = selectedControl == 1,
+                selected = selectedControl == KARAOKE_CONTROL_OFFSET,
+                active = lyricsOffsetMs != 0,
+                paper = paper,
+                scale = scale,
+            ) {
+                Text(
+                    text = "±",
+                    color = paper,
+                    fontSize = (17f * scale).sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            KaraokeControlCircle(
+                selected = selectedControl == KARAOKE_CONTROL_DONE,
                 active = true,
                 paper = paper,
                 scale = scale,
@@ -1291,9 +1332,23 @@ private fun KaraokeControlPanel(
                 )
             }
         }
-        Spacer(Modifier.height((10f * scale).dp))
+        Spacer(Modifier.height((9f * scale).dp))
         Text(
-            text = "UP / DOWN  VOCALS\nLEFT / RIGHT  SELECT",
+            text = "LYRICS ${if (lyricsOffsetMs >= 0) "+" else ""}${lyricsOffsetMs}ms",
+            color = paper.copy(
+                alpha = if (selectedControl == KARAOKE_CONTROL_OFFSET) 0.95f else 0.7f,
+            ),
+            fontSize = (8.2f * scale).sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height((7f * scale).dp))
+        Text(
+            text = if (selectedControl == KARAOKE_CONTROL_OFFSET) {
+                "UP  LYRICS EARLIER\nDOWN  LYRICS LATER\nOK  RESET"
+            } else {
+                "UP / DOWN  VOCALS\nLEFT / RIGHT  SELECT"
+            },
             color = paper.copy(alpha = 0.54f),
             fontSize = (7.2f * scale).sp,
             fontWeight = FontWeight.Medium,
@@ -1562,7 +1617,7 @@ private fun BlendedArtworkBackdrop(
         createAmbientBackdropTextures(palette, reducedDetail)
     }
     val transition = rememberInfiniteTransition(label = "ambientBackdrop")
-    val phase = transition.animateFloat(
+    val animatedPhase = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -1571,6 +1626,9 @@ private fun BlendedArtworkBackdrop(
         ),
         label = "ambientPhase",
     )
+    // Smooth mode freezes the drifting colour field so it is not redrawn every frame.
+    val frozenPhase = remember { mutableStateOf(0.18f) }
+    val phase = if (LocalSmoothLyrics.current) frozenPhase else animatedPhase
     Box(
         Modifier
             .fillMaxSize()
@@ -2453,7 +2511,10 @@ private fun AppleStyleLyricsStage(
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier, contentAlignment = Alignment.CenterStart) {
-        if (lyrics.status == LyricsStatus.SYNCED || lyrics.status == LyricsStatus.PLAIN) {
+        if (
+            !LocalSmoothLyrics.current &&
+            (lyrics.status == LyricsStatus.SYNCED || lyrics.status == LyricsStatus.PLAIN)
+        ) {
             LyricsRailGlow(
                 accent = accent,
                 paper = paper,
@@ -3064,7 +3125,11 @@ private fun ScrollableLyricLine(
                 transformOrigin = TransformOrigin(if (isTrailing) 1f else 0f, 0.5f)
             }
             .then(
-                if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
+                if (blurRadius > 0.01f && !LocalSmoothLyrics.current) {
+                    Modifier.blur((blurRadius * scale).dp)
+                } else {
+                    Modifier
+                }
             ),
     ) {
         Column(
@@ -3224,7 +3289,11 @@ private fun LyricsWriterCredit(
             .fillMaxWidth()
             .graphicsLayer { alpha = visibility * (1f - edgeBlur * 0.26f) }
             .then(
-                if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
+                if (blurRadius > 0.01f && !LocalSmoothLyrics.current) {
+                    Modifier.blur((blurRadius * scale).dp)
+                } else {
+                    Modifier
+                }
             ),
     ) {
         // Preserve the open space used by Apple Music between the final lyric
@@ -3305,7 +3374,11 @@ private fun LyricsGapIndicator(
                 alpha = emphasis * liveWindowAlpha * (1f - edgeBlur * 0.34f)
             }
             .then(
-                if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
+                if (blurRadius > 0.01f && !LocalSmoothLyrics.current) {
+                    Modifier.blur((blurRadius * scale).dp)
+                } else {
+                    Modifier
+                }
             ),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -3395,7 +3468,11 @@ private fun stalePlaceholder(
                 transformOrigin = TransformOrigin(0f, 0.5f)
             }
             .then(
-                if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
+                if (blurRadius > 0.01f && !LocalSmoothLyrics.current) {
+                    Modifier.blur((blurRadius * scale).dp)
+                } else {
+                    Modifier
+                }
             ),
     ) {
         if (isActive) {
@@ -3476,7 +3553,11 @@ private fun LyricsGapIndicator(
             .height((46f * scale).dp)
             .graphicsLayer { alpha = emphasis * arrivalFade }
             .then(
-                if (blurRadius > 0.01f) Modifier.blur((blurRadius * scale).dp) else Modifier
+                if (blurRadius > 0.01f && !LocalSmoothLyrics.current) {
+                    Modifier.blur((blurRadius * scale).dp)
+                } else {
+                    Modifier
+                }
             ),
         contentAlignment = Alignment.CenterStart,
     ) {
