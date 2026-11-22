@@ -62,6 +62,7 @@ class LrclibLyricsClient {
             }
             .sortedWith(
                 compareByDescending<JSONObject> { it.optStringOrEmpty("syncedLyrics").isNotBlank() }
+                    .thenByDescending { it.optBoolean("hasWordSync", false) }
                     .thenBy { abs(it.optDouble("duration", 0.0) - durationSec) }
             )
             .firstOrNull() ?: return null
@@ -75,6 +76,18 @@ class LrclibLyricsClient {
         }
         val synced = json.optStringOrEmpty("syncedLyrics")
         val plain = json.optStringOrEmpty("plainLyrics")
+        // Prefer word-timed rows from LRCLIB's "lyricsfile" when published.
+        val wordLines = runCatching { parseLyricsfile(json.optStringOrEmpty("lyricsfile")) }
+            .getOrDefault(emptyList())
+        if (wordLines.isNotEmpty()) {
+            return LyricsState(
+                status = LyricsStatus.SYNCED,
+                lines = wordLines,
+                plainLyrics = plain,
+                sourceId = id,
+                wordSyncMode = WordSyncMode.ENHANCED,
+            )
+        }
         val lines = parseLrc(synced)
         return when {
             lines.isNotEmpty() -> LyricsState(
@@ -144,6 +157,149 @@ class LrclibLyricsClient {
         private const val MAX_LINES = 750
 
         private val TIME_TAG = Regex("""\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
+        private val YAML_ENTRY = Regex("""^(\s*)(- )?([A-Za-z_]+):\s?(.*)$""")
+
+        /**
+         * Parses the word-timed rows of LRCLIB's YAML "lyricsfile":
+         *
+         * lines:
+         * - text: Meet me at midnight
+         *   start_ms: 4220
+         *   end_ms: 7360
+         *   words:
+         *   - text: 'Meet '
+         *     start_ms: 4220
+         *
+         * Only this fixed shape is read; anything else is ignored. Rows whose
+         * words do not spell out the row text are dropped so the renderer
+         * never highlights mismatched tokens.
+         */
+        internal fun parseLyricsfile(yaml: String): List<LyricLine> {
+            if (yaml.isBlank() || !yaml.contains("words:")) return emptyList()
+            class WordDraft(var text: String = "", var start: Long? = null, var end: Long? = null)
+            class LineDraft(
+                var text: String = "",
+                var start: Long? = null,
+                var end: Long? = null,
+                val words: MutableList<WordDraft> = mutableListOf(),
+            )
+            val drafts = mutableListOf<LineDraft>()
+            var inLines = false
+            var lineIndent = -1
+            var wordIndent = Int.MAX_VALUE
+            var inWords = false
+            var line: LineDraft? = null
+            var word: WordDraft? = null
+            yaml.lineSequence().forEach { raw ->
+                if (raw.isBlank()) return@forEach
+                val match = YAML_ENTRY.matchEntire(raw) ?: return@forEach
+                val indent = match.groupValues[1].length
+                val isItem = match.groupValues[2].isNotEmpty()
+                val key = match.groupValues[3]
+                val value = match.groupValues[4]
+                if (indent == 0 && !isItem) {
+                    inLines = key == "lines"
+                    inWords = false
+                    line = null
+                    word = null
+                    return@forEach
+                }
+                if (!inLines) return@forEach
+                if (isItem && (lineIndent < 0 || indent <= lineIndent)) {
+                    lineIndent = indent
+                    line = LineDraft().also(drafts::add)
+                    inWords = false
+                    word = null
+                } else if (isItem && inWords) {
+                    wordIndent = indent
+                    word = WordDraft().also { line?.words?.add(it) }
+                }
+                // A word's own keys sit on its "- " row or are indented past it;
+                // keys back at the row's level belong to the lyric row again.
+                val target = if (
+                    inWords && word != null &&
+                    (indent > wordIndent || (isItem && indent == wordIndent))
+                ) {
+                    word
+                } else {
+                    null
+                }
+                when (key) {
+                    "words" -> { inWords = true; word = null }
+                    "text" -> if (target != null) target.text = yamlScalar(value) else line?.text = yamlScalar(value)
+                    "start_ms" -> value.trim().toLongOrNull()?.let {
+                        if (target != null) target.start = it else line?.start = it
+                    }
+                    "end_ms" -> value.trim().toLongOrNull()?.let {
+                        if (target != null) target.end = it else line?.end = it
+                    }
+                }
+            }
+            val result = drafts.mapNotNull { draft ->
+                val lineStart = draft.start ?: return@mapNotNull null
+                val timed = draft.words.filter { it.text.isNotEmpty() && it.start != null }
+                if (timed.isEmpty()) return@mapNotNull null
+                val lineEnd = draft.end?.takeIf { it > lineStart }
+                val words = timed.mapIndexed { index, w ->
+                    val start = w.start!!
+                    val nextStart = timed.getOrNull(index + 1)?.start
+                    val end = (w.end ?: nextStart ?: lineEnd ?: (start + 500L))
+                        .coerceAtLeast(start + 1L)
+                    LyricWord(text = w.text, startMs = start, endMs = end)
+                }
+                val text = words.joinToString(separator = "") { it.text }.trimEnd()
+                if (text.isBlank() || !lyricWordsMatchLine(draft.text.ifBlank { text }, words)) {
+                    return@mapNotNull null
+                }
+                LyricLine(
+                    timeMs = minOf(lineStart, words.first().startMs),
+                    text = text,
+                    words = words,
+                    exactWordTiming = true,
+                    endMs = listOfNotNull(lineEnd, words.last().endMs).maxOrNull(),
+                )
+            }
+            // Use word timing only when it covers most rows; otherwise LRC is safer.
+            return if (result.size * 2 >= drafts.size) result.take(MAX_LINES) else emptyList()
+        }
+
+        private fun yamlScalar(raw: String): String {
+            val value = raw.trim()
+            return when {
+                value.length >= 2 && value.startsWith('\'') && value.endsWith('\'') ->
+                    value.substring(1, value.length - 1).replace("''", "'")
+                value.length >= 2 && value.startsWith('"') && value.endsWith('"') ->
+                    unescapeDoubleQuoted(value.substring(1, value.length - 1))
+                else -> value
+            }
+        }
+
+        private fun unescapeDoubleQuoted(value: String): String {
+            val out = StringBuilder(value.length)
+            var i = 0
+            while (i < value.length) {
+                val c = value[i]
+                if (c != '\\' || i + 1 >= value.length) {
+                    out.append(c); i++; continue
+                }
+                when (val next = value[i + 1]) {
+                    'n' -> { out.append('\n'); i += 2 }
+                    't' -> { out.append('\t'); i += 2 }
+                    '"', '\\', '/' -> { out.append(next); i += 2 }
+                    'u' -> {
+                        val hex = value.substring(i + 2, minOf(i + 6, value.length))
+                        val code = hex.toIntOrNull(16)
+                        if (code != null && hex.length == 4) {
+                            out.append(code.toChar()); i += 6
+                        } else {
+                            out.append(next); i += 2
+                        }
+                    }
+                    else -> { out.append(next); i += 2 }
+                }
+            }
+            return out.toString()
+        }
 
         /**
          * Parses LRC text into timed rows. Blank timed rows mark the end of the
