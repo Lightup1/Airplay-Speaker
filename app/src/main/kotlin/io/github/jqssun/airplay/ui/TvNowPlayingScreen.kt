@@ -1389,6 +1389,7 @@ private fun FullScreenMotionArtworkBackdrop(
     playing: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val smoothLyrics = LocalSmoothLyrics.current
     Box(
         modifier = modifier.background(Color.Black.copy(alpha = 0.18f)),
         contentAlignment = Alignment.Center,
@@ -1416,9 +1417,9 @@ private fun FullScreenMotionArtworkBackdrop(
                         .graphicsLayer {
                             scaleX = 1.07f
                             scaleY = 1.07f
-                            alpha = 0.86f
+                            alpha = if (smoothLyrics) 0.6f else 0.86f
                         }
-                        .blur(30.dp)
+                        .then(if (smoothLyrics) Modifier else Modifier.blur(30.dp))
                         .motionArtworkEdgeFeather(softLayer = true),
                 )
             }
@@ -1923,7 +1924,11 @@ private fun MinimalArtworkColumn(
                         scaleY = if (artworkMotionEnabled) 1.07f + (breathe - 1f) else 1.07f
                         alpha = if (artworkMotionEnabled) glow else 0.24f
                     }
-                    .blur((25f * scale).dp)
+                    // The radial gradient is already soft; re-blurring the
+                    // breathing glow every frame is too heavy for weak TV GPUs.
+                    .then(
+                        if (LocalSmoothLyrics.current) Modifier else Modifier.blur((25f * scale).dp)
+                    )
                     .background(
                         Brush.radialGradient(
                             listOf(primary, secondary.copy(alpha = 0.55f), Color.Transparent)
