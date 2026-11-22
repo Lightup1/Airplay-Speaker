@@ -96,11 +96,13 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     }
     fun sampleAudioPositionMs(): Long {
         val activeService = service
-        return if (activeService?.audioOnly?.value == true) {
+        val position = if (activeService?.audioOnly?.value == true) {
             activeService.currentPositionMs()
         } else {
             _audioPositionMs.value
         }
+        // User-tuned lyric offset: positive shows lyrics earlier.
+        return (position + _lyricsOffsetMs.value).coerceAtLeast(0L)
     }
 
     fun sampleAudioMeterLevels(): AudioMeterLevels {
@@ -223,6 +225,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _audioLatencyMs = MutableStateFlow(prefs.getInt(Prefs.AUDIO_LATENCY_MS, Prefs.DEF_AUDIO_LATENCY_MS))
     val audioLatencyMs: StateFlow<Int> = _audioLatencyMs.asStateFlow()
+
+    private val _lyricsOffsetMs = MutableStateFlow(prefs.getInt(Prefs.LYRICS_OFFSET_MS, Prefs.DEF_LYRICS_OFFSET_MS))
+    val lyricsOffsetMs: StateFlow<Int> = _lyricsOffsetMs.asStateFlow()
 
     private val _idlePreview = MutableStateFlow(prefs.getBoolean(Prefs.IDLE_PREVIEW, Prefs.DEF_IDLE_PREVIEW))
     val idlePreview: StateFlow<Boolean> = _idlePreview.asStateFlow()
@@ -552,6 +557,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply(); _applyByServerRestart() }
     fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply(); _applyByServerRestart() }
     fun setAudioLatencyMs(v: Int) { _audioLatencyMs.value = v; prefs.edit().putInt(Prefs.AUDIO_LATENCY_MS, v).apply(); _applyByServerRestart() }
+    fun setLyricsOffsetMs(v: Int) {
+        val clamped = v.coerceIn(-Prefs.LYRICS_OFFSET_LIMIT_MS, Prefs.LYRICS_OFFSET_LIMIT_MS)
+        _lyricsOffsetMs.value = clamped
+        prefs.edit().putInt(Prefs.LYRICS_OFFSET_MS, clamped).apply()
+    }
     fun setIdlePreview(v: Boolean) { _idlePreview.value = v; prefs.edit().putBoolean(Prefs.IDLE_PREVIEW, v).apply() }
     fun setMotionArtworkEnabled(v: Boolean) {
         _motionArtworkEnabled.value = v

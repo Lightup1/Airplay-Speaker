@@ -200,6 +200,9 @@
     <string name="setting_audio_delay">Override audio delay</string>
     <string name="setting_audio_delay_desc">Set a custom audio latency reported to client</string>
     <string name="audio_delay_value">%dms</string>
+    <string name="setting_lyrics_offset">Lyrics offset / 歌词偏移</string>
+    <string name="setting_lyrics_offset_desc">Use Left/Right. Negative = lyrics later, positive = lyrics earlier. 左右键调整：负数让歌词延后，正数让歌词提前。</string>
+    <string name="lyrics_offset_value">%+dms</string>
     <string name="setting_audio_buffer_multiplier">Audio buffer size</string>
     <string name="setting_audio_buffer_multiplier_desc">AudioTrack buffer size multiplier</string>
     <string name="setting_audio_buffer_multiplier_value">%dx</string>

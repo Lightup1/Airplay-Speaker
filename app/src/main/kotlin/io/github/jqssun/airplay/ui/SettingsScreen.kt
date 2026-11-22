@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import androidx.compose.ui.res.stringResource
@@ -59,6 +60,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val runInBackground by viewModel.runInBackground.collectAsState()
     val serverPort by viewModel.serverPort.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
+    val lyricsOffsetMs by viewModel.lyricsOffsetMs.collectAsState()
     val swAlacEnabled by viewModel.swAlacEnabled.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val developerOptions by viewModel.developerOptions.collectAsState()
@@ -214,6 +216,34 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_auto_fullscreen_desc),
             checked = autoFullscreen,
             onCheckedChange = { viewModel.setAutoFullscreen(it) }
+        )
+
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.setting_lyrics_offset)) },
+            supportingContent = { Text(stringResource(R.string.setting_lyrics_offset_desc)) }
+        )
+        var lyricsOffsetSliderVal by remember(lyricsOffsetMs) { mutableFloatStateOf(lyricsOffsetMs.toFloat()) }
+        ListItem(
+            headlineContent = {
+                Slider(
+                    value = lyricsOffsetSliderVal,
+                    onValueChange = { lyricsOffsetSliderVal = it },
+                    onValueChangeFinished = {
+                        viewModel.setLyricsOffsetMs(
+                            (lyricsOffsetSliderVal / Prefs.LYRICS_OFFSET_STEP_MS).roundToInt() * Prefs.LYRICS_OFFSET_STEP_MS
+                        )
+                    },
+                    valueRange = -Prefs.LYRICS_OFFSET_LIMIT_MS.toFloat()..Prefs.LYRICS_OFFSET_LIMIT_MS.toFloat(),
+                    steps = (2 * Prefs.LYRICS_OFFSET_LIMIT_MS / Prefs.LYRICS_OFFSET_STEP_MS) - 1,
+                    modifier = Modifier.dpadFocus().dpadAdjust(
+                        onLeft = { viewModel.setLyricsOffsetMs(lyricsOffsetMs - Prefs.LYRICS_OFFSET_STEP_MS) },
+                        onRight = { viewModel.setLyricsOffsetMs(lyricsOffsetMs + Prefs.LYRICS_OFFSET_STEP_MS) }
+                    )
+                )
+            },
+            trailingContent = {
+                Text(stringResource(R.string.lyrics_offset_value, lyricsOffsetSliderVal.roundToInt()))
+            }
         )
 
         SettingResolution(

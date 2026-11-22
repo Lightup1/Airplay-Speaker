@@ -26,6 +26,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import io.github.jqssun.airplay.Prefs
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -777,6 +782,7 @@ private fun TvSettingsPanel(
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
     val fullscreenMotionArtwork by viewModel.fullscreenMotionArtwork.collectAsState()
+    val lyricsOffsetMs by viewModel.lyricsOffsetMs.collectAsState()
 
     Column(
         modifier = modifier
@@ -804,6 +810,16 @@ private fun TvSettingsPanel(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 30.dp),
         ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                TvStepperCard(
+                    title = stringResource(R.string.setting_lyrics_offset),
+                    description = stringResource(R.string.setting_lyrics_offset_desc),
+                    valueText = stringResource(R.string.lyrics_offset_value, lyricsOffsetMs),
+                    onDecrease = { viewModel.setLyricsOffsetMs(lyricsOffsetMs - Prefs.LYRICS_OFFSET_STEP_MS) },
+                    onIncrease = { viewModel.setLyricsOffsetMs(lyricsOffsetMs + Prefs.LYRICS_OFFSET_STEP_MS) },
+                    onReset = { viewModel.setLyricsOffsetMs(0) },
+                )
+            }
             item {
                 TvSettingCard(
                     stringResource(R.string.setting_airplay_receiver),
@@ -1013,6 +1029,70 @@ private fun TvSettingCard(
         }
         Spacer(Modifier.width(18.dp))
         Switch(checked = checked, enabled = enabled, onCheckedChange = null)
+    }
+}
+
+/** A focusable card whose value changes with D-pad Left/Right; OK resets it. */
+@Composable
+private fun TvStepperCard(
+    title: String,
+    description: String,
+    valueText: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit,
+    onReset: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.012f else 1f, label = "tvStepperScale")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(102.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .liquidGlass(
+                shape = RoundedCornerShape(20.dp),
+                focused = focused,
+                selected = false,
+                tint = Color(0xFF85CCFF),
+                strength = 0.84f,
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.nativeKeyEvent.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> { onDecrease(); true }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> { onIncrease(); true }
+                    else -> false
+                }
+            }
+            .clickable(role = Role.Button) { onReset() }
+            .focusable()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Color(0xFFF6F4FF),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                description,
+                color = Color(0xFF9697A8),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(18.dp))
+        Text(
+            "◀  $valueText  ▶",
+            color = Color(0xFFF6F4FF),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
