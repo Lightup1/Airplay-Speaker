@@ -43,6 +43,7 @@ import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
 import io.github.jqssun.airplay.download.VideoDownloader
 import io.github.jqssun.airplay.lyrics.AppleMusicLyricsClient
+import io.github.jqssun.airplay.lyrics.LrclibLyricsClient
 import io.github.jqssun.airplay.lyrics.LyricsRequest
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
@@ -59,6 +60,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -168,6 +170,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val appleMusicLyricsClient = AppleMusicLyricsClient()
+    private val lrclibLyricsClient = LrclibLyricsClient()
     private val _lyrics = MutableStateFlow(LyricsState())
     val lyrics = _lyrics.asStateFlow()
     private var lyricsJob: Job? = null
@@ -1081,10 +1084,23 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 album = info.album,
                 durationMs = duration,
             )
+            // LRCLIB runs in parallel as a fallback for when the Apple lyric
+            // proxy is down or has nothing for this track.
+            val lrclibLookup = async {
+                withTimeoutOrNull(LYRICS_SEARCH_WINDOW_MS) {
+                    lrclibLyricsClient.find(request)
+                }
+            }
             val appleResult = withTimeoutOrNull(LYRICS_SEARCH_WINDOW_MS) {
                 appleMusicLyricsClient.find(request)
             }
-            val finalResult = (appleResult ?: LyricsState(LyricsStatus.NOT_FOUND))
+            val sourceResult = if (appleResult != null) {
+                lrclibLookup.cancel()
+                appleResult
+            } else {
+                lrclibLookup.await()?.also { log("Lyrics: Apple Music unavailable, using LRCLIB") }
+            }
+            val finalResult = (sourceResult ?: LyricsState(LyricsStatus.NOT_FOUND))
                 // Apple line-synced lyrics remain line-synced. Do not invent
                 // word timings when the source does not publish them.
                 .withRepairedWordTimings(trackDurationMs = duration)

@@ -1,0 +1,53 @@
+name: Fork debug APK
+
+# Builds an installable debug-signed APK without the upstream signing secrets,
+# and publishes it as a pre-release so it can be downloaded without logging in.
+
+on:
+  push:
+    branches:
+      - "lrclib-fallback"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Build debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Airplay-Speaker-lrclib.apk
+          sha256sum Airplay-Speaker-lrclib.apk | tee Airplay-Speaker-lrclib.apk.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Airplay-Speaker-lrclib
+          path: |
+            Airplay-Speaker-lrclib.apk
+            Airplay-Speaker-lrclib.apk.sha256
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: lrclib-build-${{ github.run_number }}
+          name: LRCLIB fallback build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          files: |
+            Airplay-Speaker-lrclib.apk
+            Airplay-Speaker-lrclib.apk.sha256
